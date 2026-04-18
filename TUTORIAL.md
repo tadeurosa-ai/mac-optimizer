@@ -125,3 +125,28 @@ rm ~/.claude/commands/optimizer.md
 Se funcionou, deixa uma estrela no GitHub. Ajuda o projeto a chegar em mais gente.
 
 **github.com/tadeurosa-ai/mac-optimizer**
+
+---
+
+## Pode perguntar a qualquer momento
+
+Durante o processo de limpeza, você pode tirar dúvidas sem perder o andamento.
+
+Claude responde sua pergunta e continua exatamente de onde parou — sem recomeçar do zero.
+
+**Exemplo:**
+```
+Claude: ⚠️ Encontrei o serviço "com.datadog.agent".
+        Quer remover? [s/n/i para explicação]
+
+Você:   o que é isso?
+
+Claude: O Datadog Agent é um serviço de monitoramento.
+        Se você não usa Datadog na sua empresa, é seguro remover.
+
+Você:   pode remover
+
+Claude: ✓ Removido. Continuando...
+```
+
+Fique à vontade para perguntar quantas vezes precisar antes de tomar qualquer decisão.
