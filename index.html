@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mac Optimizer — Plugin para Claude Code</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0a0a0a; color: #e5e5e5; line-height: 1.7; }
+    .hero { background: linear-gradient(135deg, #1a1a2e 0%, #0f0f23 100%); padding: 60px 24px 48px; text-align: center; border-bottom: 1px solid #222; }
+    .badge { display: inline-block; background: #1e3a5f; color: #60a5fa; font-size: 13px; padding: 4px 12px; border-radius: 20px; margin-bottom: 20px; }
+    h1 { font-size: clamp(28px, 5vw, 48px); font-weight: 700; color: #fff; margin-bottom: 16px; }
+    .subtitle { font-size: 18px; color: #94a3b8; max-width: 520px; margin: 0 auto 32px; }
+    .install-box { background: #111827; border: 1px solid #1f2937; border-radius: 12px; padding: 20px 24px; max-width: 640px; margin: 0 auto; text-align: left; }
+    .install-box p { font-size: 13px; color: #6b7280; margin-bottom: 10px; }
+    .install-box code { display: block; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 13px; color: #34d399; word-break: break-all; background: #0d1117; padding: 14px 16px; border-radius: 8px; border: 1px solid #1f2937; }
+    .section { max-width: 720px; margin: 0 auto; padding: 48px 24px; }
+    h2 { font-size: 24px; font-weight: 600; color: #fff; margin-bottom: 24px; }
+    h3 { font-size: 18px; font-weight: 600; color: #e2e8f0; margin: 32px 0 12px; }
+    p { color: #94a3b8; margin-bottom: 16px; }
+    .steps { counter-reset: step; }
+    .step { background: #111; border: 1px solid #1f2937; border-radius: 12px; padding: 24px; margin-bottom: 16px; position: relative; padding-left: 72px; }
+    .step::before { counter-increment: step; content: counter(step); position: absolute; left: 20px; top: 22px; width: 36px; height: 36px; background: #1e3a5f; color: #60a5fa; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 16px; }
+    .step h3 { margin-top: 0; }
+    pre { background: #0d1117; border: 1px solid #1f2937; border-radius: 8px; padding: 16px; overflow-x: auto; margin: 12px 0; }
+    pre code { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 13px; color: #34d399; }
+    .note { background: #1a1a00; border: 1px solid #3d3d00; border-radius: 8px; padding: 14px 16px; margin: 12px 0; font-size: 14px; color: #fbbf24; }
+    .demo-box { background: #0d1117; border: 1px solid #1f2937; border-radius: 12px; padding: 24px; font-family: 'SF Mono', monospace; font-size: 14px; line-height: 2; }
+    .green { color: #34d399; }
+    .yellow { color: #fbbf24; }
+    .white { color: #e5e5e5; }
+    .gray { color: #6b7280; }
+    .faq { border-top: 1px solid #1f2937; padding-top: 16px; margin-top: 16px; }
+    .faq-item { padding: 16px 0; border-bottom: 1px solid #1f2937; }
+    .faq-item strong { color: #e2e8f0; display: block; margin-bottom: 6px; }
+    .github { text-align: center; padding: 40px 24px; border-top: 1px solid #1f2937; }
+    .github a { display: inline-block; background: #21262d; color: #e5e5e5; text-decoration: none; padding: 12px 28px; border-radius: 8px; border: 1px solid #30363d; font-weight: 500; transition: background .2s; }
+    .github a:hover { background: #30363d; }
+    .req { display: inline-block; background: #1f2937; color: #94a3b8; font-size: 13px; padding: 4px 10px; border-radius: 6px; margin: 2px; }
+  </style>
+</head>
+<body>
+
+<div class="hero">
+  <div class="badge">Plugin gratuito para Claude Code</div>
+  <h1>Libere espaço no Mac<br>conversando com Claude</h1>
+  <p class="subtitle">Sem comandos. Sem configuração. Você só responde as perguntas.</p>
+  <div class="install-box">
+    <p>Cole no Terminal e pressione Enter:</p>
+    <code>mkdir -p ~/.claude/commands && curl -fsSL https://raw.githubusercontent.com/tadeurosa-ai/mac-optimizer/main/optimizer.md -o ~/.claude/commands/optimizer.md && echo "✓ /optimizer instalado"</code>
+  </div>
+</div>
+
+<div class="section">
+  <h2>Como funciona</h2>
+  <div class="demo-box">
+    <span class="gray">claude › </span><span class="white">/optimizer</span><br><br>
+    <span class="white">Escaneei seu Mac. Encontrei <strong>4.2GB</strong> para liberar:</span><br><br>
+    <span class="green">✓</span> <span class="white">Caches: 3.8GB</span> <span class="gray">— sistema reconstrói automaticamente</span><br>
+    <span class="green">✓</span> <span class="white">Instaladores antigos: 400MB</span> <span class="gray">— apps já instalados</span><br><br>
+    <span class="white">Posso deletar tudo agora? (s/n)</span><br><br>
+    <span class="gray">você › </span><span class="white">s</span><br><br>
+    <span class="green">✓ 4.2GB liberados com sucesso.</span>
+  </div>
+</div>
+
+<div class="section" style="padding-top:0">
+  <h2>Instalação passo a passo</h2>
+  <p>Nunca usou o Terminal? Sem problema. Siga os passos abaixo.</p>
+
+  <div class="steps">
+    <div class="step">
+      <h3>Instalar o Node.js</h3>
+      <p>Abra o Terminal (Cmd + Espaço → Terminal → Enter) e cole:</p>
+      <pre><code>brew install node</code></pre>
+      <div class="note">Se aparecer "command not found: brew", primeiro instale o Homebrew:<br>
+      <code style="background:none;padding:0;border:none;color:#fbbf24">/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"</code><br>
+      Depois repita o <code style="background:none;padding:0;border:none;color:#fbbf24">brew install node</code>.</div>
+    </div>
+
+    <div class="step">
+      <h3>Instalar o Claude Code</h3>
+      <pre><code>npm install -g @anthropic-ai/claude-code</code></pre>
+      <p>Aguarde 1–2 minutos até terminar.</p>
+    </div>
+
+    <div class="step">
+      <h3>Fazer login</h3>
+      <pre><code>claude</code></pre>
+      <p>Na primeira vez vai pedir login com sua conta Claude (mesma do site). Siga as instruções.</p>
+    </div>
+
+    <div class="step">
+      <h3>Instalar o Mac Optimizer</h3>
+      <pre><code>mkdir -p ~/.claude/commands && curl -fsSL https://raw.githubusercontent.com/tadeurosa-ai/mac-optimizer/main/optimizer.md -o ~/.claude/commands/optimizer.md && echo "✓ /optimizer instalado"</code></pre>
+      <p>Só precisa fazer isso uma vez. O comando fica salvo para sempre.</p>
+    </div>
+
+    <div class="step">
+      <h3>Usar</h3>
+      <p>Abra o Claude Code (<code>claude</code> no Terminal) e digite:</p>
+      <pre><code>/optimizer</code></pre>
+      <p>Claude conduz tudo. Você só responde as perguntas.</p>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="padding-top:0">
+  <h2>Requisitos</h2>
+  <span class="req">macOS 12 ou superior</span>
+  <span class="req">Claude Code</span>
+  <span class="req">Plano Pro ou Max</span>
+
+  <div class="faq" style="margin-top:40px">
+    <h2>Dúvidas</h2>
+
+    <div class="faq-item">
+      <strong>Preciso pagar algo além do Claude Pro/Max?</strong>
+      Não. O plugin é gratuito.
+    </div>
+    <div class="faq-item">
+      <strong>É seguro?</strong>
+      Sim. Claude só deleta com sua confirmação explícita. Itens duvidosos são perguntados antes.
+    </div>
+    <div class="faq-item">
+      <strong>Funciona toda vez?</strong>
+      Sim. Após instalar, basta digitar /optimizer em qualquer sessão do Claude Code.
+    </div>
+    <div class="faq-item">
+      <strong>Como desinstalar?</strong>
+      <pre><code>rm ~/.claude/commands/optimizer.md</code></pre>
+    </div>
+  </div>
+</div>
+
+<div class="github">
+  <p style="margin-bottom:16px;color:#6b7280">Se funcionou, deixa uma estrela. Ajuda o projeto a chegar em mais gente.</p>
+  <a href="https://github.com/tadeurosa-ai/mac-optimizer">⭐ GitHub — tadeurosa-ai/mac-optimizer</a>
+</div>
+
+</body>
+</html>
