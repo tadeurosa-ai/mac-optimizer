@@ -50,7 +50,8 @@ Pronto. Claude escaneia, pergunta, você responde. Nada mais.
 
 | Sessão | Espaço liberado |
 |--------|----------------|
-| Teste 1 (17/04/2026) | 2.6GB |
+| Mac antigo — antes de migrar para máquina nova | **43 GB** |
+| Teste pós-instalação (17/04/2026) | 2.6 GB |
 
 ---
 
