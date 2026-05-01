@@ -2,6 +2,8 @@
 
 Libera espaço no seu Mac conversando com Claude. Sem comandos, sem configuração.
 
+![demo](demo.gif)
+
 ---
 
 ## Instalação
