@@ -15,7 +15,7 @@ Paste in your terminal and press Enter:
 Cole no terminal e pressione Enter:
 
 ```bash
-mkdir -p ~/.claude/commands && curl -fsSL https://raw.githubusercontent.com/tadeurosa-ai/mac-optimizer/main/optimizer.md -o ~/.claude/commands/optimizer.md && echo "✓ /optimizer installed"
+mkdir -p ~/.claude/skills/optimizer/scripts && curl -fsSL https://raw.githubusercontent.com/tadeurosa-ai/mac-optimizer/main/optimizer/scripts/optimizer.sh -o ~/.claude/skills/optimizer/scripts/optimizer.sh && curl -fsSL https://raw.githubusercontent.com/tadeurosa-ai/mac-optimizer/main/optimizer/SKILL.md -o ~/.claude/skills/optimizer/SKILL.md && command rm -f ~/.claude/commands/optimizer.md && echo "Mac Optimizer instalado. Abra o Claude Code e digite /optimizer"
 ```
 
 ---

@@ -57,12 +57,12 @@ Na primeira vez vai pedir para fazer login com sua conta Claude (a mesma do site
 Com o Claude Code instalado, cole este comando no Terminal:
 
 ```bash
-mkdir -p ~/.claude/commands && curl -fsSL https://raw.githubusercontent.com/tadeurosa-ai/mac-optimizer/main/optimizer.md -o ~/.claude/commands/optimizer.md && echo "✓ /optimizer instalado"
+mkdir -p ~/.claude/skills/optimizer/scripts && curl -fsSL https://raw.githubusercontent.com/tadeurosa-ai/mac-optimizer/main/optimizer/scripts/optimizer.sh -o ~/.claude/skills/optimizer/scripts/optimizer.sh && curl -fsSL https://raw.githubusercontent.com/tadeurosa-ai/mac-optimizer/main/optimizer/SKILL.md -o ~/.claude/skills/optimizer/SKILL.md && command rm -f ~/.claude/commands/optimizer.md && echo "Mac Optimizer instalado. Abra o Claude Code e digite /optimizer"
 ```
 
 Você verá:
 ```
-✓ /optimizer instalado
+Mac Optimizer instalado. Abra o Claude Code e digite /optimizer
 ```
 
 **Só precisa fazer isso uma vez.** O comando fica salvo para sempre.
@@ -117,7 +117,7 @@ Sim. Após instalar, basta digitar `/optimizer` em qualquer sessão do Claude Co
 
 **Como desinstalar o plugin:**
 ```bash
-rm ~/.claude/commands/optimizer.md
+rm -r ~/.claude/skills/optimizer
 ```
 
 ---

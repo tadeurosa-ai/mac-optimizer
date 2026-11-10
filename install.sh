@@ -1,41 +1,31 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # ============================================================
-#  Mac Optimizer FREE — Instalador
+#  Mac Optimizer — Instalador (para quem clonou o repositório)
 #  Uso: bash install.sh
-#  Após instalar: abra Claude Code e digite /optimizer
+#  Instala a skill em ~/.claude/skills/optimizer/ e remove o comando
+#  antigo ~/.claude/commands/optimizer.md (senão ficam dois /optimizer).
 # ============================================================
+set -eu
 
-set -e
+AQUI="$(cd "$(dirname "$0")" && pwd)"
+ORIGEM="$AQUI/optimizer"
+DESTINO="$HOME/.claude/skills/optimizer"
+ANTIGO="$HOME/.claude/commands/optimizer.md"
 
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-RED='\033[0;31m'
-BOLD='\033[1m'
-NC='\033[0m'
-
-echo ""
-echo -e "${BOLD}${BLUE}Mac Optimizer FREE — Instalando...${NC}"
-echo ""
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CMD_SRC="$SCRIPT_DIR/optimizer.md"
-CMD_DST="$HOME/.claude/commands/optimizer.md"
-
-if [ ! -f "$CMD_SRC" ]; then
-  echo -e "${RED}Erro: optimizer.md não encontrado em $SCRIPT_DIR${NC}"
+if [ ! -f "$ORIGEM/SKILL.md" ] || [ ! -f "$ORIGEM/scripts/optimizer.sh" ]; then
+  echo "Erro: arquivos da skill não encontrados em $ORIGEM"
   exit 1
 fi
 
-mkdir -p "$HOME/.claude/commands"
-cp "$CMD_SRC" "$CMD_DST"
+mkdir -p "$DESTINO/scripts"
+cp "$ORIGEM/scripts/optimizer.sh" "$DESTINO/scripts/optimizer.sh"
+cp "$ORIGEM/SKILL.md" "$DESTINO/SKILL.md"
+echo "✓ Skill instalada em $DESTINO"
 
-echo -e "  ${GREEN}✓${NC}  Comando /optimizer instalado"
+if [ -f "$ANTIGO" ]; then
+  command rm -f "$ANTIGO"
+  echo "✓ Comando antigo removido ($ANTIGO)"
+fi
+
 echo ""
-echo -e "${BOLD}${GREEN}Pronto!${NC}"
-echo ""
-echo -e "  Abra o ${BOLD}Claude Code${NC} e digite:"
-echo ""
-echo -e "      ${BOLD}/optimizer${NC}"
-echo ""
-echo -e "  Claude cuida do resto. Você só responde as perguntas."
-echo ""
+echo "Pronto! Abra o Claude Code e digite /optimizer"
