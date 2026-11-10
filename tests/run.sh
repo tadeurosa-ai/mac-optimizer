@@ -110,6 +110,8 @@ mb()   { dd if=/dev/zero of="$1" bs=1048576 count="$2" 2>/dev/null; }
 sessao_de() { printf '%s\n' "$1" | awk -F'|' '$1=="SESSAO"{print $2}'; }
 # ID de um item pelo tipo e nome: id_de "<saida>" INSTALADOR x.dmg
 id_de() { printf '%s\n' "$1" | awk -F'|' -v t="$2" -v n="$3" '$1==t && index($0, n){print $2; exit}'; }
+# ID de um item da quarentena pelo nome mostrado: qid_de "<saida de listar-quarentena>" nome
+qid_de() { printf '%s\n' "$1" | awk -F'|' -v n="$2" '$1=="QITEM" && $5==n{print $2; exit}'; }
 
 criar_app() { # nome bundlename bundleid
   local d="$T/apps/$1.app/Contents"; mkdir -p "$d"
@@ -349,10 +351,46 @@ novo_ambiente
 mkdir -p "$TRASH/2026-01-05/dmgs"; echo velho > "$TRASH/2026-01-05/dmgs/velho.dmg"
 L="$(roda listar-quarentena)"
 verifica T-ANT "listado como antigo, com dias > 0" sh -c "printf '%s\n' \"\$1\" | awk -F'|' '\$1==\"QITEM\" && \$3==\"antigo\" && \$5==\"velho.dmg\" && \$7>0{f=1} END{exit !f}'" _ "$L"
-roda restaurar "antigo:2026-01-05/dmgs/velho.dmg" >/dev/null; C=$?
+QV="$(qid_de "$L" velho.dmg)"
+roda restaurar "$QV" >/dev/null; C=$?
 verifica T-ANTb "sem destino pede destino (código 3)" test "$C" = 3
-roda restaurar "antigo:2026-01-05/dmgs/velho.dmg" --destino "$H/Downloads/velho.dmg" >/dev/null
+roda restaurar "$QV" --destino "$H/Downloads/velho.dmg" >/dev/null
 verifica T-ANTc "restaurado no destino escolhido" test -e "$H/Downloads/velho.dmg"
+
+# ---------- T-PIPE nome com "|" na quarentena ----------
+novo_ambiente
+mkdir -p "$TRASH/2026-01-05/dmgs"
+echo a > "$TRASH/2026-01-05/dmgs/a|b.dmg"; echo c > "$TRASH/2026-01-05/dmgs/c|d.dmg"; echo n > "$TRASH/2026-01-05/dmgs/normal.dmg"
+OUT="$(roda previa 2>&1)"; C=$?
+verifica T-PIPE "prévia termina e conta os 3 itens" sh -c "[ $C = 0 ] && printf '%s\n' \"\$1\" | grep -q '^QUARENTENA|3|'" _ "$OUT"
+L="$(roda listar-quarentena)"
+verifica T-PIPEb "listagem com 7 campos e nome legível" sh -c \
+  "printf '%s\n' \"\$1\" | awk -F'|' '\$1==\"QITEM\"{n++; if (NF!=7) e=1} END{exit !(n==3 && !e)}' && printf '%s\n' \"\$1\" | grep -q '|a¦b.dmg|'" _ "$L"
+QA="$(qid_de "$L" 'a¦b.dmg')"; QC="$(qid_de "$L" 'c¦d.dmg')"
+verifica T-PIPEc "ID estável entre duas listagens" test -n "$QA" -a "$QA" = "$(qid_de "$(roda listar-quarentena)" 'a¦b.dmg')"
+roda restaurar "$QA" --destino "$H/Downloads/a|b.dmg" >/dev/null
+verifica T-PIPEd "restaurado com o nome verdadeiro" sh -c "[ -e '$H/Downloads/a|b.dmg' ] && [ ! -e '$TRASH/2026-01-05/dmgs/a|b.dmg' ]"
+roda apagar-de-vez "$QC" >/dev/null
+verifica T-PIPEe "apagado de vez (item com mais de 30 dias)" sh -c "[ ! -e '$TRASH/2026-01-05/dmgs/c|d.dmg' ] && [ -e '$TRASH/2026-01-05/dmgs/normal.dmg' ]"
+novo_ambiente
+echo x > "$H/Downloads/x|y.dmg"
+S="$(roda scan)"; SID="$(sessao_de "$S")"
+verifica T-PIPEf "linha do scan com 5 campos" sh -c "printf '%s\n' \"\$1\" | awk -F'|' '\$1==\"INSTALADOR\" && NF==5 && \$4==\"x¦y.dmg\"{f=1} END{exit !f}'" _ "$S"
+roda quarentena --sessao "$SID" --itens "$(id_de "$S" INSTALADOR 'x¦y.dmg')" >/dev/null
+roda restaurar Q1 >/dev/null
+verifica T-PIPEg "item novo com | volta ao lugar" sh -c "[ -e '$H/Downloads/x|y.dmg' ] && /bin/bash '$SCRIPT' listar-quarentena | grep -q '^QUARENTENA_ITENS|0$'"
+
+# ---------- T-PRAZO apagar de vez antes dos 30 dias ----------
+novo_ambiente
+echo z > "$H/Downloads/z.dmg"
+S="$(roda scan)"; SID="$(sessao_de "$S")"
+roda quarentena --sessao "$SID" --itens "$(id_de "$S" INSTALADOR z.dmg)" >/dev/null
+QZ="$(awk -F'\t' '{print $5}' "$TRASH/manifest.tsv")"
+OUT="$(roda apagar-de-vez Q1)"; C=$?
+verifica T-PRAZO "recusa por padrão (código 10) e o arquivo fica" sh -c "[ $C = 10 ] && printf '%s' \"\$1\" | grep -q 'antes_do_prazo' && [ -e '$QZ' ]" _ "$OUT"
+OUT="$(roda apagar-de-vez Q1 --antes-do-prazo)"; C=$?
+verifica T-PRAZOb "com confirmação expressa apaga" sh -c "[ $C = 0 ] && printf '%s' \"\$1\" | grep -q '^APAGADO_DE_VEZ|Q1|' && [ ! -e '$QZ' ]" _ "$OUT"
+verifica T-PRAZOc "skill só usa a opção a pedido expresso" sh -c "grep -q -- '--antes-do-prazo' '$SKILL' && grep -qi 'com todas as letras' '$SKILL'"
 
 # ---------- T-SES sessões ----------
 novo_ambiente

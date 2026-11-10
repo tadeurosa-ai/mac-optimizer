@@ -30,6 +30,10 @@ OPT_SESSAO_MAX_MIN="${OPT_SESSAO_MAX_MIN-60}"
 OPT_MIN_MB_APPSUPPORT="${OPT_MIN_MB_APPSUPPORT-10}"
 
 TAB="$(printf '\t')"
+PRAZO_DIAS=30
+# Nome para mostrar numa linha de saída: "|" vira "¦" e tab/quebra de linha viram espaço,
+# para o nome nunca quebrar os campos. O caminho verdadeiro fica só na sessão / manifest.
+campo() { local s="${1//|/¦}"; s="${s//$TAB/ }"; printf '%s' "${s//$'\n'/ }"; }
 APPS_IDX=""
 LOGF=""
 SF=""
@@ -238,15 +242,15 @@ scan_caches() {
     nome="$(basename "$item")"
     kb="$(kb_de "$item")"
     case "$nome" in
-      ms-playwright) echo "CACHE_MANTIDO|$nome|$(mb_de_kb "$kb")|navegadores de teste: apagar obriga a baixar tudo de novo"; continue;;
-      Homebrew|pip) echo "CACHE_MANTIDO|$nome|$(mb_de_kb "$kb")|limpo pela categoria Homebrew + pip"; continue;;
+      ms-playwright) echo "CACHE_MANTIDO|$(campo "$nome")|$(mb_de_kb "$kb")|navegadores de teste: apagar obriga a baixar tudo de novo"; continue;;
+      Homebrew|pip) echo "CACHE_MANTIDO|$(campo "$nome")|$(mb_de_kb "$kb")|limpo pela categoria Homebrew + pip"; continue;;
     esac
-    if [ ! -w "$item" ]; then echo "CACHE_MANTIDO|$nome|$(mb_de_kb "$kb")|protegido pelo macOS"; continue; fi
+    if [ ! -w "$item" ]; then echo "CACHE_MANTIDO|$(campo "$nome")|$(mb_de_kb "$kb")|protegido pelo macOS"; continue; fi
     aviso=""
     if [ "${#nome}" -ge 4 ] && pgrep -if -- "$nome" >/dev/null 2>&1; then aviso="app_aberto"; fi
     n=$((n+1))
     printf 'C%s\tcache\t%s\t%s\t%s\t%s\t-\n' "$n" "$item" "$kb" "$(mtime_de "$item")" "$(inode_de "$item")" >> "$SF"
-    echo "CACHE|C$n|$nome|$(mb_de_kb "$kb")|volta_sozinho|$aviso"
+    echo "CACHE|C$n|$(campo "$nome")|$(mb_de_kb "$kb")|volta_sozinho|$aviso"
     total=$((total+kb))
   done
   echo "CACHE_TOTAL|$(mb_de_kb "$total")"
@@ -288,7 +292,7 @@ scan_instaladores() {
     if casa_app "$(norm "$primeiro")" || casa_app "$(norm "$base")"; then tipo="seguro"; else tipo="duvida"; fi
     n=$((n+1))
     printf 'I%s\tdmgs\t%s\t%s\t%s\t%s\t%s\n' "$n" "$f" "$kb" "$(mtime_de "$f")" "$(inode_de "$f")" "$tipo" >> "$SF"
-    echo "INSTALADOR|I$n|$tipo|$nome|$(mb_de_kb "$kb")"
+    echo "INSTALADOR|I$n|$tipo|$(campo "$nome")|$(mb_de_kb "$kb")"
   done < <(find "$OPT_DOWNLOADS" -maxdepth 2 \( -name '*.dmg' -o -name '*.pkg' \) -type f -print0 2>"$err")
   if grep -qi 'not permitted\|permission denied' "$err" 2>/dev/null; then
     echo "AVISO|downloads_sem_permissao|$OPT_DOWNLOADS"
@@ -326,7 +330,7 @@ scan_appsupport() {
     subpasta_de_app "$item" && continue
     n=$((n+1))
     printf 'S%s\tappsupport\t%s\t%s\t%s\t%s\ttalvez_orfao\n' "$n" "$item" "$kb" "$(mtime_de "$item")" "$(inode_de "$item")" >> "$SF"
-    echo "APPSUPPORT|S$n|$nome|$(mb_de_kb "$kb")|talvez_orfao"
+    echo "APPSUPPORT|S$n|$(campo "$nome")|$(mb_de_kb "$kb")|talvez_orfao"
   done
   echo "APPSUPPORT_TOTAL|$n"
 }
@@ -361,9 +365,9 @@ scan_agentes() {
       if [ "$classe" = "desconhecido" ]; then
         n=$((n+1))
         printf 'A%s\tlaunchagents\t%s\t%s\t%s\t%s\t%s\n' "$n" "$p" "$(kb_de "$p")" "$(mtime_de "$p")" "$(inode_de "$p")" "$classe" >> "$SF"
-        echo "AGENTE|A$n|$classe|usuario|$label"
+        echo "AGENTE|A$n|$classe|usuario|$(campo "$label")"
       else
-        echo "AGENTE|-|$classe|usuario|$label"
+        echo "AGENTE|-|$classe|usuario|$(campo "$label")"
       fi
     done
   fi
@@ -377,7 +381,7 @@ scan_agentes() {
       [ -f "$p" ] || continue
       label="$(basename "$p" .plist)"; low="$(minusc "$label")"
       classe="$(classificar_agente "$p" "$low")"
-      echo "AGENTE|-|$classe|sistema|$label|$d"
+      echo "AGENTE|-|$classe|sistema|$(campo "$label")|$d"
     done
   done
 }
@@ -392,7 +396,7 @@ scan_snapshots() {
 scan_quarentena_resumo() {
   local n=0 kb=0 l
   while IFS= read -r l; do
-    n=$((n+1)); kb=$((kb + $(printf '%s' "$l" | awk -F'|' '{print $5}') ))
+    n=$((n+1)); kb=$((kb + $(printf '%s' "$l" | cut -f5) ))
   done < <(listar_quarentena_kb)
   echo "QUARENTENA|$n|$(mb_de_kb "$kb")"
 }
@@ -508,7 +512,8 @@ cmd_remover_agente() {
 }
 
 # ---------- QUARENTENA: listar / restaurar / apagar de vez ----------
-# Linha interna: qid|tipo|categoria|nome|kb|dias|caminho
+# Linha interna (separada por tab): qid tipo categoria nome kb dias caminho
+# ID: Q<n> para itens com manifest; QA<cksum do caminho> para itens do formato antigo (estável).
 listar_quarentena_kb() {
   local m qid ep cat orig dest kb dias d c item agora_s dia_s
   m="$(manifest)"; agora_s="$(agora)"
@@ -518,7 +523,7 @@ listar_quarentena_kb() {
       [ -n "$qid" ] || continue
       [ -e "$dest" ] || continue
       dias=$(( (agora_s - ep) / 86400 ))
-      echo "Q$qid|novo|$cat|$(basename "$orig")|$kb|$dias|$dest"
+      printf 'Q%s\tnovo\t%s\t%s\t%s\t%s\t%s\n' "$qid" "$cat" "$(basename "$orig")" "$kb" "$dias" "$dest"
     done < "$m"
   fi
   for d in "$OPT_TRASH"/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]; do
@@ -530,7 +535,8 @@ listar_quarentena_kb() {
         [ -e "$item" ] || continue
         if [ -f "$m" ] && awk -F'\t' -v p="$item" '$5==p{f=1} END{exit !f}' "$m"; then continue; fi
         dias=$(( (agora_s - dia_s) / 86400 ))
-        echo "antigo:$(basename "$d")/$(basename "$c")/$(basename "$item")|antigo|$(basename "$c")|$(basename "$item")|$(kb_de "$item")|$dias|$item"
+        printf 'QA%s\tantigo\t%s\t%s\t%s\t%s\t%s\n' "$(printf '%s' "$item" | cksum | awk '{print $1}')" \
+          "$(basename "$c")" "$(basename "$item")" "$(kb_de "$item")" "$dias" "$item"
       done
     done
   done
@@ -538,15 +544,15 @@ listar_quarentena_kb() {
 
 cmd_listar_quarentena() {
   local qid tipo cat nome kb dias path n=0
-  while IFS='|' read -r qid tipo cat nome kb dias path; do
+  while IFS="$TAB" read -r qid tipo cat nome kb dias path; do
     n=$((n+1))
-    echo "QITEM|$qid|$tipo|$cat|$nome|$(mb_de_kb "$kb")|$dias"
+    echo "QITEM|$qid|$tipo|$cat|$(campo "$nome")|$(mb_de_kb "$kb")|$dias"
   done < <(listar_quarentena_kb)
   echo "QUARENTENA_ITENS|$n"
 }
 
 achar_qitem() {
-  listar_quarentena_kb | awk -F'|' -v q="$1" '$1==q' | head -1
+  listar_quarentena_kb | awk -F'\t' -v q="$1" '$1==q' | head -1
 }
 
 cmd_restaurar() {
@@ -555,8 +561,8 @@ cmd_restaurar() {
   raiz_ok OPT_TRASH "$OPT_TRASH"
   linha="$(achar_qitem "$q")"
   [ -n "$linha" ] || die "item_nao_encontrado_na_quarentena" 4
-  tipo="$(printf '%s' "$linha" | cut -d'|' -f2)"; cat="$(printf '%s' "$linha" | cut -d'|' -f3)"
-  nome="$(printf '%s' "$linha" | cut -d'|' -f4)"; path="$(printf '%s' "$linha" | cut -d'|' -f7)"
+  tipo="$(printf '%s' "$linha" | cut -f2)"; cat="$(printf '%s' "$linha" | cut -f3)"
+  nome="$(printf '%s' "$linha" | cut -f4)"; path="$(printf '%s' "$linha" | cut -f7-)"
   case "$path" in "${OPT_TRASH%/}"/*) ;; *) die "fora_da_quarentena" 4;; esac
   if [ "$tipo" = "novo" ]; then
     orig="$(awk -F'\t' -v q="${q#Q}" '$1==q{print $4}' "$(manifest)" | head -1)"
@@ -579,13 +585,16 @@ cmd_restaurar() {
 }
 
 cmd_apagar_de_vez() {
-  local q="$1" linha tipo path kb
+  local q="$1" antes="$2" linha tipo path kb dias
   [ -n "$q" ] || die "qid_ausente" 8
   raiz_ok OPT_TRASH "$OPT_TRASH"
   linha="$(achar_qitem "$q")"
   [ -n "$linha" ] || die "item_nao_encontrado_na_quarentena" 4
-  tipo="$(printf '%s' "$linha" | cut -d'|' -f2)"; kb="$(printf '%s' "$linha" | cut -d'|' -f5)"
-  path="$(printf '%s' "$linha" | cut -d'|' -f7)"
+  tipo="$(printf '%s' "$linha" | cut -f2)"; kb="$(printf '%s' "$linha" | cut -f5)"
+  dias="$(printf '%s' "$linha" | cut -f6)"; path="$(printf '%s' "$linha" | cut -f7-)"
+  if [ "${dias:-0}" -lt "$PRAZO_DIAS" ] && [ "$antes" != 1 ]; then
+    echo "RECUSADO|$q|antes_do_prazo|dias=$dias|prazo=$PRAZO_DIAS"; exit 10
+  fi
   case "$path" in "${OPT_TRASH%/}"/*/*/*) ;; *) die "fora_da_quarentena" 4;; esac
   case "$path" in *"/../"*|*"/..") die "caminho_invalido" 4;; esac
   command rm -rf "$path"
@@ -625,17 +634,18 @@ Uso: optimizer.sh <subcomando> [opções]
   concluir        --sessao ID
   listar-quarentena
   restaurar <QID> [--destino CAMINHO]
-  apagar-de-vez <QID>
+  apagar-de-vez <QID> [--antes-do-prazo]   (sem a opção, recusa item com menos de 30 dias)
 EOF
 }
 
 SUB="${1:-}"; [ $# -gt 0 ] && shift
-ARG_SESSAO=""; ARG_ITENS=""; ARG_DESTINO=""; ARG_POS=""
+ARG_SESSAO=""; ARG_ITENS=""; ARG_DESTINO=""; ARG_POS=""; ARG_ANTES=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --sessao) ARG_SESSAO="${2:-}"; shift 2 || shift;;
     --itens) ARG_ITENS="${2:-}"; shift 2 || shift;;
     --destino) ARG_DESTINO="${2:-}"; shift 2 || shift;;
+    --antes-do-prazo) ARG_ANTES=1; shift;;
     *) ARG_POS="$1"; shift;;
   esac
 done
@@ -651,6 +661,6 @@ case "$SUB" in
   concluir) cmd_concluir "$ARG_SESSAO";;
   listar-quarentena) cmd_listar_quarentena;;
   restaurar) cmd_restaurar "$ARG_POS" "$ARG_DESTINO";;
-  apagar-de-vez) cmd_apagar_de_vez "$ARG_POS";;
+  apagar-de-vez) cmd_apagar_de_vez "$ARG_POS" "$ARG_ANTES";;
   *) uso; exit 2;;
 esac

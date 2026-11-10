@@ -36,7 +36,10 @@ Versão esperada: 2.0.0
 Rode `bash "${CLAUDE_SKILL_DIR}/scripts/optimizer.sh" listar-quarentena`.
 Cada linha `QITEM|<id>|<novo/antigo>|<categoria>|<nome>|<MB>|<dias>`. Se houver itens com 30 dias ou mais, mostre
 e pergunte, item a item, se quer **apagar de vez**, **restaurar** ou **manter**:
-- apagar de vez: `bash "${CLAUDE_SKILL_DIR}/scripts/optimizer.sh" apagar-de-vez <id>`
+- apagar de vez: `bash "${CLAUDE_SKILL_DIR}/scripts/optimizer.sh" apagar-de-vez <id>` — o script recusa item com
+  menos de 30 dias (`antes_do_prazo`). Explique que o item ainda está no prazo de segurança. Só rode de novo com
+  `--antes-do-prazo` se o usuário disser com todas as letras que quer apagar antes do prazo; nunca use essa
+  opção por conta própria nem a ofereça como atalho.
 - restaurar: `bash "${CLAUDE_SKILL_DIR}/scripts/optimizer.sh" restaurar <id>` — se responder `PRECISA_DESTINO`
   (item antigo), pergunte onde devolver (sugira o caminho da resposta) e rode de novo com `--destino "<caminho>"`.
   Se responder `destino_ocupado`, já existe um arquivo com esse nome lá: o script **não sobrescreve**; ofereça o
