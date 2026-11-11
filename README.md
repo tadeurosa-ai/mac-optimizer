@@ -39,6 +39,10 @@ That's it. Claude scans, asks questions, you answer. Nothing else.
 - Detects Application Support folders from removed apps
 - Analyzes unnecessary LaunchAgents and daemons
 - Identifies local Time Machine snapshots
+- Cleans the npm cache and unused pnpm packages (they download again when a project needs them; needs internet)
+- Shows, without deleting: Xcode, Docker, Colima and your largest `node_modules` folders
+- Shows, without deleting: AI models (Ollama, Hugging Face, Whisper, LM Studio) and iPhone backups
+- Breaks down what "System Data" is made of, as far as macOS reports it
 - Asks before deleting anything questionable
 - 30-day quarantine — recoverable if you change your mind
 - Executes cleanup with your approval
