@@ -114,6 +114,10 @@ duble_npm() {
   cat > "$T/bin/npm" <<'EOF'
 #!/bin/bash
 echo "npm $*" >> "$DUBLE_CALLS"
+# como o npm de verdade: grava um log a cada execução e apaga os antigos acima de 10 na pasta de logs
+ld="$HOME/.npm/_logs"; for a in "$@"; do case "$a" in --logs-dir=*) ld="${a#--logs-dir=}";; esac; done
+mkdir -p "$ld" && : > "$ld/$(date +%Y%m%d%H%M%S)-$$-debug-0.log"
+find "$ld" -name '*-debug-0.log' | sort | awk -v n="$(find "$ld" -name '*-debug-0.log' | wc -l)" 'NR <= n-10' | while IFS= read -r v; do command rm -f "$v"; done
 case "$1 ${2:-}" in
   "config get")
     if [ -f .npmrc ]; then sed -n 's/^cache=//p' .npmrc; else echo "${DUBLE_NPM_CACHE:-$HOME/.npm}"; fi;;
@@ -156,7 +160,7 @@ case "$1" in
   info) case "${DUBLE_DOCKER:-on}" in on) echo ok; exit 0;; trava) sleep 1001; exit 1;; *) exit 1;; esac;;
   context) echo colima;;
   images) for i in ${DUBLE_DOCKER_ORFAS:-}; do echo "$i"; done;;
-  system) printf 'sha256:aaa 1.5GB\nsha256:bbb 200MB\nsha256:ccc 3.2GB\n';;
+  system) printf 'sha256:aaa 1.5GB 0\nsha256:bbb 200MB 0\nsha256:ccc 3.2GB 1\n';;
 esac
 exit 0
 EOF
@@ -659,7 +663,7 @@ verifica T-NPM "scan mostra o cache do npm com ID e 3 MB" sh -c "printf '%s' \"\
 OUT="$(roda limpar-dev --sessao "$SID" --itens "$ID")"
 HR="$(cd -P "$H" && pwd -P)"   # caminho real (no macOS /var é link para /private/var)
 verifica T-NPMb "chama npm cache clean com a pasta-mãe e o cache esvazia" sh -c \
-  "grep -qxF -- 'npm cache clean --force --cache $HR/.npm' '$CALLS' && [ ! -e '$H/.npm/_cacache' ] && printf '%s' \"\$1\" | grep -q '^LIBERADO|$ID|3'" _ "$OUT"
+  "grep -qE -- '^npm cache clean --force --cache $HR/.npm --logs-dir=' '$CALLS' && [ ! -e '$H/.npm/_cacache' ] && printf '%s' \"\$1\" | grep -q '^LIBERADO|$ID|3'" _ "$OUT"
 novo_ambiente; duble_npm
 mkdir -p "$H/.npm/_cacache"; mb "$H/.npm/_cacache/f" 2
 S="$(roda scan)"; SID="$(sessao_de "$S")"; ID="$(id_de "$S" DEV npm_cache)"
@@ -682,9 +686,12 @@ verifica T-NPM-CACHEb "npm fora do PATH com cache presente: tamanho sem ID" sh -
 novo_ambiente; duble_npm
 mkdir -p "$H/.npm/_cacache"; mb "$H/.npm/_cacache/f" 1
 S="$(roda scan)"; SID="$(sessao_de "$S")"; ID="$(id_de "$S" DEV npm_cache)"
-processo_falso npm install lodash
-OUT="$(roda limpar-dev --sessao "$SID" --itens "$ID")"; sem_falso
-verifica T-NPM-INSTALANDO "npm install rodando: recusa e não chama o clean" sh -c "printf '%s' \"\$1\" | grep -q 'instalacao_em_andamento' && ! grep -q 'cache clean' '$CALLS' && [ -e '$H/.npm/_cacache/f' ]" _ "$OUT"
+for comando in "install lodash" "cit" "isntall react" "upd"; do
+  # shellcheck disable=SC2086
+  processo_falso npm $comando
+  OUT="$(roda limpar-dev --sessao "$SID" --itens "$ID")"; sem_falso
+  verifica "T-NPM-INSTALANDO($comando)" "npm instalando: recusa e não chama o clean" sh -c "printf '%s' \"\$1\" | grep -q 'instalacao_em_andamento' && ! grep -q 'cache clean' '$CALLS' && [ -e '$H/.npm/_cacache/f' ]" _ "$OUT"
+done
 processo_falso npm exec @algum/servidor-mcp
 OUT="$(roda limpar-dev --sessao "$SID" --itens "$ID")"; sem_falso
 verifica T-NPM-EXEC "npm exec rodando não bloqueia" sh -c "printf '%s' \"\$1\" | grep -q '^LIBERADO|$ID'" _ "$OUT"
@@ -702,7 +709,7 @@ S="$(roda scan)"; SID="$(sessao_de "$S")"; ID="$(id_de "$S" DEV pnpm_store)"
 verifica T-PNPM "scan mostra o store do pnpm com ID e 'ate'" sh -c "printf '%s' \"\$1\" | grep -q '^DEV|D[0-9]*|pnpm_store|2|ate'" _ "$S"
 OUT="$(roda limpar-dev --sessao "$SID" --itens "$ID")"
 verifica T-PNPMb "pnpm store prune chamado e espaço liberado" sh -c "grep -q 'pnpm store prune' '$CALLS' && [ ! -e '$P/files' ] && printf '%s' \"\$1\" | grep -q '^LIBERADO|$ID|2'" _ "$OUT"
-for comando in "add react" "-r install" "--filter web add react" "dev"; do
+for comando in "add react" "-r install" "--filter web add react" "dev" "dlx create-x"; do
   novo_ambiente; duble_pnpm
   P="$H/Library/pnpm/store/v11"; mkdir -p "$P/files"; mb "$P/files/a" 1
   S="$(roda scan)"; SID="$(sessao_de "$S")"; ID="$(id_de "$S" DEV pnpm_store)"
@@ -711,14 +718,14 @@ for comando in "add react" "-r install" "--filter web add react" "dev"; do
   OUT="$(roda limpar-dev --sessao "$SID" --itens "$ID")"; sem_falso
   verifica "T-PNPM-RODANDO($comando)" "pnpm rodando: recusa pnpm_rodando" sh -c "printf '%s' \"\$1\" | grep -q 'pnpm_rodando' && [ -e '$P/files/a' ]" _ "$OUT"
 done
-for comando in "dlx create-x" "exec tsc"; do
+for comando in "exec tsc" "exec eslint ."; do
   novo_ambiente; duble_pnpm
   P="$H/Library/pnpm/store/v11"; mkdir -p "$P/files"; mb "$P/files/a" 1
   S="$(roda scan)"; SID="$(sessao_de "$S")"; ID="$(id_de "$S" DEV pnpm_store)"
   # shellcheck disable=SC2086
   processo_falso pnpm $comando
   OUT="$(roda limpar-dev --sessao "$SID" --itens "$ID")"; sem_falso
-  verifica "T-PNPM-DLX($comando)" "pnpm dlx/exec não bloqueia" sh -c "printf '%s' \"\$1\" | grep -q '^LIBERADO|$ID'" _ "$OUT"
+  verifica "T-PNPM-EXEC($comando)" "pnpm exec não bloqueia" sh -c "printf '%s' \"\$1\" | grep -q '^LIBERADO|$ID'" _ "$OUT"
 done
 novo_ambiente; duble_pnpm
 P="$H/Library/pnpm/store/v11"; mkdir -p "$P/files"; mb "$P/files/a" 1
@@ -798,6 +805,8 @@ verifica T-DOCKER "sem imagens órfãs: nada_a_limpar, sem ID" sh -c "printf '%s
 S="$(DUBLE_DOCKER_ORFAS="sha256:bbb" roda scan)"
 verifica T-DOCKERb "órfã de 200MB: 'até' ~190 MB, sem ID" sh -c "printf '%s' \"\$1\" | grep -Eq '^DEV\\|-\\|docker\\|19[0-9]\\|colima'" _ "$S"
 verifica T-DOCKERc "nunca chama prune, rm, volume ou container" sh -c "! grep -Eq '^docker(.* )? ?(prune|rm|rmi|volume|container)( |\$)' '$CALLS'"
+S="$(DUBLE_DOCKER_ORFAS="sha256:bbb sha256:ccc" roda scan)"
+verifica T-DOCKERd "órfã usada por container não entra na soma (só os ~191 MB da bbb)" sh -c "printf '%s' \"\$1\" | grep -Eq '^DEV\\|-\\|docker\\|19[0-9]\\|colima'" _ "$S"
 S="$(DUBLE_DOCKER=off roda scan)"
 verifica T-DOCKER-OFF "serviço parado: 'parado' e o scan termina" sh -c "printf '%s' \"\$1\" | grep -q '^DEV|-|docker|parado' && printf '%s' \"\$1\" | grep -q '^FIM_SCAN'" _ "$S"
 
@@ -844,6 +853,24 @@ verifica T-IPHONE "backups contados, nada tocado" sh -c "printf '%s' \"\$1\" | g
 chmod 000 "$B"
 S="$(roda scan)"; chmod 755 "$B"
 verifica T-IPHONEb "sem permissão: aviso e o scan termina" sh -c "printf '%s' \"\$1\" | grep -q '^AVISO|backup_iphone_sem_permissao' && printf '%s' \"\$1\" | grep -q '^FIM_SCAN'" _ "$S"
+
+novo_ambiente
+mkdir -p "$H/Library/Application Support/MobileSync/Backup/aparelho1"
+chmod 000 "$H/Library/Application Support/MobileSync"
+S="$(roda scan)"; chmod 755 "$H/Library/Application Support/MobileSync"
+verifica T-IPHONEc "pasta MobileSync sem permissão: aviso, nunca '0 backups'" sh -c "printf '%s' \"\$1\" | grep -q '^AVISO|backup_iphone_sem_permissao' && ! printf '%s' \"\$1\" | grep -q '^BACKUP_IPHONE|0|'" _ "$S"
+
+# ---------- T-NPM-LOGS ----------
+novo_ambiente; duble_npm
+mkdir -p "$H/.npm/_cacache" "$H/.npm/_logs"; mb "$H/.npm/_cacache/f" 1
+i=1; while [ "$i" -le 12 ]; do : > "$H/.npm/_logs/2020010100000$i-1-debug-0.log"; i=$((i+1)); done
+S="$(roda previa)"
+verifica T-NPM-LOGS "prévia: os 12 logs antigos do npm continuam lá" test "$(find "$H/.npm/_logs" -name '*-debug-0.log' | wc -l | tr -d ' ')" = 12
+LD="$(sed -n 's/^npm config get cache --logs-dir=//p' "$CALLS" | head -1)"
+verifica T-NPM-LOGSb "npm consultado com pasta de logs temporária, apagada no fim" sh -c "[ -n '$LD' ] && [ '$LD' != '$H/.npm/_logs' ] && [ ! -e '$LD' ]"
+S="$(roda scan)"; SID="$(sessao_de "$S")"; ID="$(id_de "$S" DEV npm_cache)"
+roda limpar-dev --sessao "$SID" --itens "$ID" >/dev/null
+verifica T-NPM-LOGSc "limpar-dev: os logs antigos continuam lá" test "$(find "$H/.npm/_logs" -name '*-debug-0.log' | wc -l | tr -d ' ')" = 12
 
 # ---------- T-APPSUP-EXC / T-APPSUP-AGIR ----------
 novo_ambiente

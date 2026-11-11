@@ -33,7 +33,7 @@ Versão esperada: 2.1.0
    lugar (`item_devolvido`) ou ficou na pasta indicada em `item_em=`; diga qual dos dois.
    `protegido` → é backup de iPhone ou modelo de IA: o script nunca apaga nem põe essas pastas na quarentena.
    Respostas da limpeza do npm/pnpm (`limpar-dev`): `instalacao_em_andamento` → há uma instalação do npm
-   rodando; espere terminar e tente de novo. `pnpm_rodando` → feche o que estiver rodando com pnpm e tente de
+   rodando; espere terminar e tente de novo. `pnpm_rodando` → feche o que estiver rodando com pnpm (inclusive `pnpm dlx`; só `pnpm exec` não conta) e tente de
    novo. `caminho_mudou` → a pasta do cache mudou desde o scan; rode o scan de novo. `fora_da_pasta_pessoal` →
    o cache fica fora da pasta pessoal; o script só mostra o tamanho e não limpa. `ja_feito` → já foi limpo nesta
    sessão. `nada_liberado` → o comando rodou mas nada saiu; não diga que liberou. `nao_mediu` → não deu para

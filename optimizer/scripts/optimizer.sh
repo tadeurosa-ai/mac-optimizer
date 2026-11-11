@@ -55,6 +55,7 @@ nome_invalido() { # categoria caminho kb
 }
 APPS_IDX=""
 TRAVADO=0
+NPM_LOGS=""
 NDEV=0
 SNAP_N=0
 LOGF=""
@@ -75,6 +76,7 @@ plist_val() { [ -f "$1" ] || return 0; plutil -extract "$2" raw -o - "$1" 2>/dev
 limpar_tmp() {
   [ -n "$APPS_IDX" ] && [ -f "$APPS_IDX" ] && command rm -f "$APPS_IDX"
   [ "$TRAVADO" = 1 ] && destravar
+  [ -n "$NPM_LOGS" ] && [ -d "$NPM_LOGS" ] && command rm -rf "$NPM_LOGS"
   return 0
 }
 trap limpar_tmp EXIT
@@ -530,6 +532,11 @@ dev_com_id() { # categoria caminho_real kb rotulo
   echo "DEV|D$NDEV|$1|$(mb_texto "$3")|$4"
 }
 
+# Todo npm roda com --logs-dir numa pasta temporária (apagada no fim): o npm grava um log a cada execução e apaga
+# os antigos da pasta de logs; assim a prévia não apaga nada da pessoa (revisão do Codex no código).
+# Chamar no shell principal, antes de usar "$NPM_LOGS".
+preparar_npm_logs() { [ -n "$NPM_LOGS" ] || NPM_LOGS="$(mktemp -d -t optimizer-npmlogs)" || NPM_LOGS=""; }
+
 # Última linha da saída de uma consulta (npm config get cache / pnpm store path). Código como o de com_limite.
 consulta() { local o rc; o="$(com_limite "$OPT_LIMITE_S" "$@")"; rc=$?; printf '%s' "$o" | tail -1; return "$rc"; }
 
@@ -540,7 +547,9 @@ scan_npm() {
     else echo "DEV|-|npm|nao_instalado"; fi
     return
   fi
-  bruto="$(consulta npm config get cache)"; rc=$?
+  preparar_npm_logs
+  [ -n "$NPM_LOGS" ] || { echo "DEV|-|npm|nao_disponivel"; return; }
+  bruto="$(consulta npm config get cache --logs-dir="$NPM_LOGS")"; rc=$?
   [ "$rc" = 124 ] && { echo "DEV|-|npm|sem_resposta"; return; }
   if [ "$rc" != 0 ] || [ -z "$bruto" ] || nome_ruim "$bruto"; then echo "DEV|-|npm|nao_disponivel"; return; fi
   pai="$(real_de "$bruto")"
@@ -566,7 +575,7 @@ scan_pnpm() {
 }
 
 # Docker (só mostra): "até X MB" = soma do UniqueSize das imagens órfãs ("UNIQUE SIZE is the amount of space
-# that's only used by a given image", doc do docker system df). O cache de build não é medido nesta versão.
+# that's only used by a given image", doc do docker system df) que nenhum container usa (as usadas não saem). O cache de build não é medido nesta versão.
 scan_docker() {
   local rc ctx orfas tam mb
   command -v docker >/dev/null 2>&1 || { echo "DEV|-|docker|nao_instalado"; return; }
@@ -577,10 +586,10 @@ scan_docker() {
   orfas="$(com_limite "$OPT_LIMITE_S" docker images -f dangling=true -q --no-trunc)"; rc=$?
   [ "$rc" = 0 ] || { echo "DEV|-|docker|sem_resposta"; return; }
   [ -n "$orfas" ] || { echo "DEV|-|docker|0|nada_a_limpar"; return; }
-  tam="$(com_limite "$OPT_LIMITE_S" docker system df -v --format '{{range .Images}}{{.ID}} {{.UniqueSize}}{{println}}{{end}}')"; rc=$?
+  tam="$(com_limite "$OPT_LIMITE_S" docker system df -v --format '{{range .Images}}{{.ID}} {{.UniqueSize}} {{.Containers}}{{println}}{{end}}')"; rc=$?
   [ "$rc" = 0 ] || { echo "DEV|-|docker|sem_resposta"; return; }
   mb="$(awk 'NR==FNR{if($1!="")o[$1]=1; next}
-    ($1 in o){v=$2; n=v; sub(/[A-Za-z]+$/,"",n); u=v; sub(/^[0-9.]+/,"",u); m=1
+    ($1 in o) && $3=="0" {v=$2; n=v; sub(/[A-Za-z]+$/,"",n); u=v; sub(/^[0-9.]+/,"",u); m=1
       if(u=="kB"||u=="KB")m=1e3; else if(u=="MB")m=1e6; else if(u=="GB")m=1e9; else if(u=="TB")m=1e12
       s+=n*m}
     END{printf "%.0f", s/1048576}' <(printf '%s\n' "$orfas") <(printf '%s\n' "$tam"))"
@@ -671,7 +680,9 @@ scan_ia() {
 
 # Backups de iPhone/iPad (só mostra; apagar só pelo Finder > aparelho > Gerenciar Backups).
 scan_iphone() {
-  local b="$OPT_APPSUPPORT/MobileSync/Backup" n err
+  local ms="$OPT_APPSUPPORT/MobileSync" b="$OPT_APPSUPPORT/MobileSync/Backup" n err
+  # pasta de cima sem permissão: "Backup" parece não existir, mas pode existir (revisão do Codex no código)
+  if [ -e "$ms" ] && { [ ! -r "$ms" ] || [ ! -x "$ms" ]; }; then echo "AVISO|backup_iphone_sem_permissao"; return; fi
   [ -e "$b" ] || { echo "BACKUP_IPHONE|0|0"; return; }
   if [ ! -r "$b" ] || [ ! -x "$b" ]; then echo "AVISO|backup_iphone_sem_permissao"; return; fi
   err="$(mktemp -t optimizer-err)"
@@ -814,16 +825,20 @@ cmd_quarentena() {
 
 # ---------- limpar-dev: cache do npm e store do pnpm (2.1.0) ----------
 # Instalação em andamento: lê a lista de processos uma vez (o próprio grep não entra nela).
-# npm: só install/i/ci/add/update/up/upgrade bloqueiam (npm exec e npx, usados pelos servidores MCP, não).
+# npm: bloqueiam os comandos que instalam — install, ci, update, install-test e install-ci-test —, escritos de
+# qualquer forma que o npm aceita (o npm põe no processo o comando como foi digitado). npm exec e npx, usados
+# pelos servidores MCP, não bloqueiam. Lista gerada do próprio npm (ver plano, §9, para refazer):
+NPM_INSTALA='add|ci|cit|clean-install|clean-install-|clean-install-t|clean-install-te|clean-install-tes|clean-install-test|i|ic|in|ins|inst|insta|instal|install|install-ci|install-ci-|install-ci-t|install-ci-te|install-ci-tes|install-ci-test|install-cl|install-cle|install-clea|install-clean|install-t|install-te|install-tes|install-test|isnt|isnta|isntal|isntall|isntall-|isntall-c|isntall-cl|isntall-cle|isntall-clea|isntall-clean|it|si|sit|ud|udp|udpa|udpat|udpate|up|upd|upda|updat|update|upg|upgr|upgra|upgrad|upgrade'
 instalando_npm() {
   local p; p="$(ps -axo args= 2>/dev/null)"
-  printf '%s\n' "$p" | grep -Eq '(^|/)npm(-cli\.js)?[[:space:]]+(install|i|ci|add|update|up|upgrade)([[:space:]]|$)'
+  printf '%s\n' "$p" | grep -Eq "(^|/)npm(-cli\\.js)?[[:space:]]+($NPM_INSTALA)([[:space:]]|\$)"
 }
-# pnpm: qualquer pnpm rodando bloqueia, menos pnpm dlx e pnpm exec.
+# pnpm: qualquer pnpm rodando bloqueia, menos pnpm exec. pnpm dlx também bloqueia: o store prune apaga o cache
+# do dlx vencido (doc do pnpm), mesmo de um servidor dlx que ainda está rodando (revisão do Codex no código).
 pnpm_rodando() {
   local p; p="$(ps -axo args= 2>/dev/null)"
   printf '%s\n' "$p" | grep -E '(^|/)pnpm(\.cjs|\.mjs)?([[:space:]]|$)' |
-    grep -Evq '(^|/)pnpm(\.cjs|\.mjs)?[[:space:]]+(dlx|exec)([[:space:]]|$)'
+    grep -Evq '(^|/)pnpm(\.cjs|\.mjs)?[[:space:]]+exec([[:space:]]|$)'
 }
 ja_limpo() { awk -F'\t' -v id="$1" '$1=="#limpo" && $2==id{f=1} END{exit !f}' "$SF"; }
 
@@ -837,7 +852,9 @@ limpar_dev_item() {
   if [ "$cat" = npm_cache ]; then
     instalando_npm && { echo "RECUSADO|$id|instalacao_em_andamento"; return; }
     command -v npm >/dev/null 2>&1 || { echo "RECUSADO|$id|npm_nao_encontrado"; return; }
-    bruto="$(consulta npm config get cache)"; rc=$?
+    preparar_npm_logs
+    [ -n "$NPM_LOGS" ] || { echo "RECUSADO|$id|nao_disponivel"; return; }
+    bruto="$(consulta npm config get cache --logs-dir="$NPM_LOGS")"; rc=$?
   else
     pnpm_rodando && { echo "RECUSADO|$id|pnpm_rodando"; return; }
     command -v pnpm >/dev/null 2>&1 || { echo "RECUSADO|$id|pnpm_nao_encontrado"; return; }
@@ -855,7 +872,7 @@ limpar_dev_item() {
   antes="$(kb_de "$alvo")"
   if [ "$cat" = npm_cache ]; then
     # o npm acrescenta "_cacache" sozinho: recebe a pasta-mãe (revisão r2)
-    com_limite "$OPT_LIMITE_LIMPEZA_S" npm cache clean --force --cache "$atual" >/dev/null; rc=$?
+    com_limite "$OPT_LIMITE_LIMPEZA_S" npm cache clean --force --cache "$atual" --logs-dir="$NPM_LOGS" >/dev/null; rc=$?
   else
     com_limite "$OPT_LIMITE_LIMPEZA_S" pnpm store prune >/dev/null; rc=$?
   fi
