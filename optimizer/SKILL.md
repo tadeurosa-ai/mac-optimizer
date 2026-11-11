@@ -40,6 +40,10 @@ e pergunte, item a item, se quer **apagar de vez**, **restaurar** ou **manter**:
   menos de 30 dias (`antes_do_prazo`). Explique que o item ainda está no prazo de segurança. Só rode de novo com
   `--antes-do-prazo` se o usuário disser com todas as letras que quer apagar antes do prazo; nunca use essa
   opção por conta própria nem a ofereça como atalho.
+- Item com tipo `nome_invalido` (ou resposta `RECUSADO|...|nome_invalido|pasta=...`): o nome do arquivo tem uma
+  quebra de linha, e o script não mexe nele por segurança. Diga a pasta e oriente: no Finder, menu **Ir > Ir para
+  a Pasta…**, colar a pasta, renomear o arquivo tirando a quebra de linha. Depois de renomeado, ele aparece normal
+  na próxima vez.
 - restaurar: `bash "${CLAUDE_SKILL_DIR}/scripts/optimizer.sh" restaurar <id>` — se responder `PRECISA_DESTINO`
   (item antigo), pergunte onde devolver (sugira o caminho da resposta) e rode de novo com `--destino "<caminho>"`.
   Se responder `destino_ocupado`, já existe um arquivo com esse nome lá: o script **não sobrescreve**; ofereça o
@@ -69,6 +73,8 @@ Pergunte: "Quer só **ver** o que dá para limpar (modo prévia — nada é apag
   podem ir para a quarentena.
 - `SNAPSHOTS|<n>` — quantidade de snapshots locais do Time Machine (o tamanho deles não é medido).
 - `QUARENTENA|<itens>|<MB>` — o que já está na quarentena.
+- `NOME_INVALIDO|<categoria>|<nome>|<MB>|<pasta>` — o nome tem uma quebra de linha; o script não limpa nem põe
+  na quarentena. Mostre a pasta e oriente renomear pelo Finder (**Ir > Ir para a Pasta…**); depois, rodar de novo.
 
 ## 4. Menu
 

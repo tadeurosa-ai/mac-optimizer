@@ -392,6 +392,47 @@ OUT="$(roda apagar-de-vez Q1 --antes-do-prazo)"; C=$?
 verifica T-PRAZOb "com confirmação expressa apaga" sh -c "[ $C = 0 ] && printf '%s' \"\$1\" | grep -q '^APAGADO_DE_VEZ|Q1|' && [ ! -e '$QZ' ]" _ "$OUT"
 verifica T-PRAZOc "skill só usa a opção a pedido expresso" sh -c "grep -q -- '--antes-do-prazo' '$SKILL' && grep -qi 'com todas as letras' '$SKILL'"
 
+# ---------- T-TAB nome com TAB na quarentena ----------
+novo_ambiente
+D="$TRASH/2026-01-05/dmgs"; mkdir -p "$D"
+NT="$(printf 'a\tb.dmg')"; echo a > "$D/$NT"; NT2="$(printf 'c\td.dmg')"; echo c > "$D/$NT2"
+OUT="$(roda previa 2>&1)"; C=$?
+verifica T-TAB "prévia termina, sem erro, conta 2 itens" sh -c "[ $C = 0 ] && ! printf '%s\n' \"\$1\" | grep -q 'line [0-9]' && printf '%s\n' \"\$1\" | grep -q '^QUARENTENA|2|'" _ "$OUT"
+L="$(roda listar-quarentena)"
+verifica T-TABb "listagem com 7 campos, nome inteiro, dias certos" sh -c \
+  "printf '%s\n' \"\$1\" | awk -F'|' '\$1==\"QITEM\"{n++; if (NF!=7 || \$7<30) e=1} END{exit !(n==2 && !e)}' && printf '%s\n' \"\$1\" | grep -q '|a b.dmg|'" _ "$L"
+roda restaurar "$(qid_de "$L" 'a b.dmg')" --destino "$H/Downloads/$NT" >/dev/null
+verifica T-TABc "restaurado com o nome verdadeiro" sh -c "[ -e \"\$1\" ] && [ ! -e \"\$2\" ]" _ "$H/Downloads/$NT" "$D/$NT"
+roda apagar-de-vez "$(qid_de "$L" 'c d.dmg')" >/dev/null
+verifica T-TABd "apagado de vez" test ! -e "$D/$NT2"
+
+# ---------- T-NL quebra de linha no nome ----------
+novo_ambiente
+D="$TRASH/2026-01-05/dmgs"; mkdir -p "$D"
+NL="$(printf 'c\nd.dmg')"; echo c > "$D/$NL"; echo isca > "$D/c d.dmg"
+OUT="$(roda previa 2>&1)"; C=$?
+verifica T-NL "prévia termina sem erro e conta 2 itens" sh -c "[ $C = 0 ] && ! printf '%s\n' \"\$1\" | grep -qi 'line [0-9]\|awk:' && printf '%s\n' \"\$1\" | grep -q '^QUARENTENA|2|'" _ "$OUT"
+L="$(roda listar-quarentena)"
+QN="$(printf '%s\n' "$L" | awk -F'|' '$1=="QITEM" && $3=="nome_invalido"{print $2}')"
+verifica T-NLb "listado como nome_invalido, 7 campos" sh -c "[ -n '$QN' ] && printf '%s\n' \"\$1\" | awk -F'|' '\$1==\"QITEM\" && NF!=7{e=1} END{exit e}'" _ "$L"
+OUT="$(roda restaurar "$QN" --destino "$H/Downloads/x.dmg")"; C1=$?
+OUT2="$(roda apagar-de-vez "$QN" --antes-do-prazo)"; C2=$?
+verifica T-NLc "restaurar e apagar recusam (código 11), dizem a pasta e nada muda" sh -c \
+  "[ $C1$C2 = 1111 ] && printf '%s' \"\$1\" | grep -q 'nome_invalido|pasta=$D|renomear_no_finder' && [ -e \"\$2\" ] && [ -e '$D/c d.dmg' ] && [ ! -e '$H/Downloads/x.dmg' ]" _ "$OUT$OUT2" "$D/$NL"
+mv "$D/$NL" "$D/cd.dmg"
+L="$(roda listar-quarentena)"
+roda apagar-de-vez "$(qid_de "$L" cd.dmg)" >/dev/null
+verifica T-NLd "depois de renomeado volta a funcionar" sh -c "printf '%s\n' \"\$1\" | grep -q '|antigo|dmgs|cd.dmg|' && [ ! -e '$D/cd.dmg' ]" _ "$L"
+novo_ambiente
+NL="$(printf 'e\nf.dmg')"; echo e > "$H/Downloads/$NL"
+mkdir -p "$H/Library/Application Support/$(printf 'g\nh')"; mb "$H/Library/Application Support/$(printf 'g\nh')/f" 2
+S="$(roda scan 2>&1)"; C=$?; SID="$(sessao_de "$S")"
+verifica T-NLe "scan sem erro; recusa pôr na quarentena e diz a pasta" sh -c \
+  "[ $C = 0 ] && ! printf '%s\n' \"\$1\" | grep -qi 'line [0-9]\|awk:' && printf '%s\n' \"\$1\" | grep -q '^NOME_INVALIDO|dmgs|e f.dmg|[0-9.]*|$H/Downloads$' && printf '%s\n' \"\$1\" | grep -q '^NOME_INVALIDO|appsupport|g h|' && ! printf '%s\n' \"\$1\" | grep -q '^INSTALADOR|I'" _ "$S"
+OUT="$(roda quarentena --sessao "$SID" --itens I1)"
+verifica T-NLf "nada entra na quarentena" sh -c "[ -e \"\$1\" ] && [ ! -e '$TRASH/manifest.tsv' ]" _ "$H/Downloads/$NL"
+verifica T-NLg "skill explica nome inválido e Finder" sh -c "grep -q 'NOME_INVALIDO' '$SKILL' && grep -q 'nome_invalido' '$SKILL' && grep -qi 'Finder' '$SKILL'"
+
 # ---------- T-SES sessões ----------
 novo_ambiente
 echo s1 > "$H/Downloads/s1.dmg"

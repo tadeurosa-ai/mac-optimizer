@@ -34,6 +34,12 @@ PRAZO_DIAS=30
 # Nome para mostrar numa linha de saída: "|" vira "¦" e tab/quebra de linha viram espaço,
 # para o nome nunca quebrar os campos. O caminho verdadeiro fica só na sessão / manifest.
 campo() { local s="${1//|/¦}"; s="${s//$TAB/ }"; printf '%s' "${s//$'\n'/ }"; }
+# Caminho com quebra de linha não entra na sessão nem na quarentena: o script nunca age sobre ele
+# (o nome "limpo" poderia coincidir com outro arquivo). A pessoa renomeia pelo Finder.
+tem_quebra() { case "$1" in *$'\n'*) return 0;; esac; return 1; }
+nome_invalido() { # categoria caminho kb
+  echo "NOME_INVALIDO|$1|$(campo "$(basename "$2")")|$(mb_de_kb "$3")|$(campo "$(dirname "$2")")"
+}
 APPS_IDX=""
 LOGF=""
 SF=""
@@ -45,7 +51,7 @@ die() { echo "ERRO|$1"; exit "${2:-1}"; }
 agora() { date +%s; }
 norm() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9'; }
 minusc() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
-kb_de() { local k; k="$(du -sk "$1" 2>/dev/null | awk '{print $1}')"; echo "${k:-0}"; }
+kb_de() { local k; k="$(du -sk "$1" 2>/dev/null | awk 'NR==1{print $1}')"; echo "${k:-0}"; }  # NR==1: nome com quebra de linha
 mb_de_kb() { awk -v k="$1" 'BEGIN{printf "%.0f", k/1024}'; }
 mtime_de() { stat -f %m "$1" 2>/dev/null || echo 0; }
 inode_de() { stat -f %i "$1" 2>/dev/null || echo 0; }
@@ -241,6 +247,7 @@ scan_caches() {
     [ -e "$item" ] || continue
     nome="$(basename "$item")"
     kb="$(kb_de "$item")"
+    if tem_quebra "$item"; then nome_invalido cache "$item" "$kb"; continue; fi
     case "$nome" in
       ms-playwright) echo "CACHE_MANTIDO|$(campo "$nome")|$(mb_de_kb "$kb")|navegadores de teste: apagar obriga a baixar tudo de novo"; continue;;
       Homebrew|pip) echo "CACHE_MANTIDO|$(campo "$nome")|$(mb_de_kb "$kb")|limpo pela categoria Homebrew + pip"; continue;;
@@ -285,6 +292,7 @@ scan_instaladores() {
   fi
   err="$(mktemp -t optimizer-err)"
   while IFS= read -r -d '' f; do
+    if tem_quebra "$f"; then nome_invalido dmgs "$f" "$(kb_de "$f")"; continue; fi
     nome="$(basename "$f")"
     base="${nome%.*}"
     primeiro="$(printf '%s' "$base" | awk -F'[-_ .(]' '{print $1}')"
@@ -318,6 +326,7 @@ scan_appsupport() {
   [ -d "$OPT_APPSUPPORT" ] || { echo "APPSUPPORT_TOTAL|0"; return; }
   for item in "$OPT_APPSUPPORT"/*; do
     [ -d "$item" ] || continue
+    if tem_quebra "$item"; then nome_invalido appsupport "$item" "$(kb_de "$item")"; continue; fi
     nome="$(basename "$item")"
     low="$(minusc "$nome")"
     case "$low" in com.apple.*) continue;; esac
@@ -360,6 +369,7 @@ scan_agentes() {
   if [ -d "$OPT_USER_AGENTS" ]; then
     for p in "$OPT_USER_AGENTS"/*.plist; do
       [ -f "$p" ] || continue
+      if tem_quebra "$p"; then nome_invalido launchagents "$p" "$(kb_de "$p")"; continue; fi
       label="$(basename "$p" .plist)"; low="$(minusc "$label")"
       classe="$(classificar_agente "$p" "$low")"
       if [ "$classe" = "desconhecido" ]; then
@@ -523,7 +533,7 @@ listar_quarentena_kb() {
       [ -n "$qid" ] || continue
       [ -e "$dest" ] || continue
       dias=$(( (agora_s - ep) / 86400 ))
-      printf 'Q%s\tnovo\t%s\t%s\t%s\t%s\t%s\n' "$qid" "$cat" "$(basename "$orig")" "$kb" "$dias" "$dest"
+      printf 'Q%s\tnovo\t%s\t%s\t%s\t%s\t%s\n' "$qid" "$cat" "$(campo "$(basename "$orig")")" "$kb" "$dias" "$dest"
     done < "$m"
   fi
   for d in "$OPT_TRASH"/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]; do
@@ -535,8 +545,14 @@ listar_quarentena_kb() {
         [ -e "$item" ] || continue
         if [ -f "$m" ] && awk -F'\t' -v p="$item" '$5==p{f=1} END{exit !f}' "$m"; then continue; fi
         dias=$(( (agora_s - dia_s) / 86400 ))
+        if tem_quebra "$item"; then
+          # último campo = pasta (sem o nome): o script nunca age sobre este item
+          printf 'QA%s\tnome_invalido\t%s\t%s\t%s\t%s\t%s\n' "$(printf '%s' "$item" | cksum | awk '{print $1}')" \
+            "$(campo "$(basename "$c")")" "$(campo "$(basename "$item")")" "$(kb_de "$item")" "$dias" "$c"
+          continue
+        fi
         printf 'QA%s\tantigo\t%s\t%s\t%s\t%s\t%s\n' "$(printf '%s' "$item" | cksum | awk '{print $1}')" \
-          "$(basename "$c")" "$(basename "$item")" "$(kb_de "$item")" "$dias" "$item"
+          "$(campo "$(basename "$c")")" "$(campo "$(basename "$item")")" "$(kb_de "$item")" "$dias" "$item"
       done
     done
   done
@@ -561,6 +577,8 @@ cmd_restaurar() {
   raiz_ok OPT_TRASH "$OPT_TRASH"
   linha="$(achar_qitem "$q")"
   [ -n "$linha" ] || die "item_nao_encontrado_na_quarentena" 4
+  [ "$(printf '%s' "$linha" | cut -f2)" = "nome_invalido" ] && {
+    echo "RECUSADO|$q|nome_invalido|pasta=$(printf '%s' "$linha" | cut -f7-)|renomear_no_finder"; exit 11; }
   tipo="$(printf '%s' "$linha" | cut -f2)"; cat="$(printf '%s' "$linha" | cut -f3)"
   nome="$(printf '%s' "$linha" | cut -f4)"; path="$(printf '%s' "$linha" | cut -f7-)"
   case "$path" in "${OPT_TRASH%/}"/*) ;; *) die "fora_da_quarentena" 4;; esac
@@ -590,6 +608,8 @@ cmd_apagar_de_vez() {
   raiz_ok OPT_TRASH "$OPT_TRASH"
   linha="$(achar_qitem "$q")"
   [ -n "$linha" ] || die "item_nao_encontrado_na_quarentena" 4
+  [ "$(printf '%s' "$linha" | cut -f2)" = "nome_invalido" ] && {
+    echo "RECUSADO|$q|nome_invalido|pasta=$(printf '%s' "$linha" | cut -f7-)|renomear_no_finder"; exit 11; }
   tipo="$(printf '%s' "$linha" | cut -f2)"; kb="$(printf '%s' "$linha" | cut -f5)"
   dias="$(printf '%s' "$linha" | cut -f6)"; path="$(printf '%s' "$linha" | cut -f7-)"
   if [ "${dias:-0}" -lt "$PRAZO_DIAS" ] && [ "$antes" != 1 ]; then
