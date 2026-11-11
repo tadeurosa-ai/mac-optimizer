@@ -37,6 +37,9 @@ campo() { local s="${1//|/¦}"; s="${s//$TAB/ }"; printf '%s' "${s//$'\n'/ }"; }
 # Caminho com quebra de linha não entra na sessão nem na quarentena: o script nunca age sobre ele
 # (o nome "limpo" poderia coincidir com outro arquivo). A pessoa renomeia pelo Finder.
 tem_quebra() { case "$1" in *$'\n'*) return 0;; esac; return 1; }
+# No scan, TAB também barra: a sessão é separada por tab, e um nome com tab faria o ID apontar
+# para outro item (achado da revisão do Codex). Itens antigos com TAB na quarentena seguem listáveis.
+nome_ruim() { case "$1" in *$'\n'*|*"$TAB"*) return 0;; esac; return 1; }
 nome_invalido() { # categoria caminho kb
   echo "NOME_INVALIDO|$1|$(campo "$(basename "$2")")|$(mb_de_kb "$3")|$(campo "$(dirname "$2")")"
 }
@@ -177,6 +180,22 @@ disco_livre_kb() { df -k "$OPT_DISK" 2>/dev/null | tail -1 | awk '{print $4}'; }
 # qid  epoch  categoria  caminho_original  caminho_quarentena  kb
 manifest() { echo "$OPT_TRASH/manifest.tsv"; }
 
+# Trava da quarentena: só um processo por vez escolhe número e grava o registro (achado do Codex).
+# Trava de processo que já morreu é liberada.
+trava_dir() { echo "$OPT_TRASH/.trava"; }
+travar() {
+  local d i=0 max="${OPT_TRAVA_TENTATIVAS:-100}" dono
+  d="$(trava_dir)"
+  while ! mkdir "$d" 2>/dev/null; do
+    dono="$(cat "$d/pid" 2>/dev/null)"
+    if [ -n "$dono" ] && ! kill -0 "$dono" 2>/dev/null; then command rm -rf "$d"; continue; fi
+    i=$((i+1)); [ "$i" -ge "$max" ] && return 1
+    sleep 0.1
+  done
+  echo "$$" > "$d/pid"
+}
+destravar() { command rm -rf "$(trava_dir)"; }
+
 proximo_qid() {
   local m; m="$(manifest)"
   [ -f "$m" ] || { echo 1; return; }
@@ -185,7 +204,9 @@ proximo_qid() {
 
 remover_do_manifest() {
   local m tmp; m="$(manifest)"; tmp="$m.tmp.$$"
+  travar || return 1
   awk -F'\t' -v q="$1" '$1!=q' "$m" > "$tmp" && mv "$tmp" "$m"
+  destravar
 }
 
 # Move para <trash>/<data>/<categoria>/<n>-<nome>. Nunca sobrescreve.
@@ -194,12 +215,20 @@ mover_para_quarentena() {
   dia="$(date +%Y-%m-%d)"
   dir="$OPT_TRASH/$dia/$cat"
   mkdir -p "$dir" || { echo "FALHOU|criar_pasta"; return 1; }
+  travar || { echo "FALHOU|ocupado"; return 1; }
   qid="$(proximo_qid)"
   dest="$dir/$qid-$(basename "$src")"
-  if [ -e "$dest" ]; then echo "FALHOU|destino_existe"; return 1; fi
+  if [ -e "$dest" ]; then destravar; echo "FALHOU|destino_existe"; return 1; fi
   mv -n "$src" "$dest" 2>/dev/null
-  if [ -e "$src" ] || [ ! -e "$dest" ]; then echo "FALHOU|nao_moveu"; return 1; fi
-  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$qid" "$(agora)" "$cat" "$src" "$dest" "$kb" >> "$(manifest)"
+  if [ -e "$src" ] || [ ! -e "$dest" ]; then destravar; echo "FALHOU|nao_moveu"; return 1; fi
+  if ! printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$qid" "$(agora)" "$cat" "$src" "$dest" "$kb" >> "$(manifest)" 2>/dev/null; then
+    # sem registro, o item perderia o caminho de volta: desfaz a mudança (achado do Codex)
+    mv -n "$dest" "$src" 2>/dev/null
+    destravar
+    if [ -e "$src" ]; then echo "FALHOU|registro_nao_gravou|item_devolvido"; else echo "FALHOU|registro_nao_gravou|item_em=$(campo "$dest")"; fi
+    return 1
+  fi
+  destravar
   log_l "QUARENTENA categoria=$cat tamanho_kb=$kb"
   QID_MOVIDO="$qid"
   return 0
@@ -247,7 +276,7 @@ scan_caches() {
     [ -e "$item" ] || continue
     nome="$(basename "$item")"
     kb="$(kb_de "$item")"
-    if tem_quebra "$item"; then nome_invalido cache "$item" "$kb"; continue; fi
+    if nome_ruim "$item"; then nome_invalido cache "$item" "$kb"; continue; fi
     case "$nome" in
       ms-playwright) echo "CACHE_MANTIDO|$(campo "$nome")|$(mb_de_kb "$kb")|navegadores de teste: apagar obriga a baixar tudo de novo"; continue;;
       Homebrew|pip) echo "CACHE_MANTIDO|$(campo "$nome")|$(mb_de_kb "$kb")|limpo pela categoria Homebrew + pip"; continue;;
@@ -292,7 +321,7 @@ scan_instaladores() {
   fi
   err="$(mktemp -t optimizer-err)"
   while IFS= read -r -d '' f; do
-    if tem_quebra "$f"; then nome_invalido dmgs "$f" "$(kb_de "$f")"; continue; fi
+    if nome_ruim "$f"; then nome_invalido dmgs "$f" "$(kb_de "$f")"; continue; fi
     nome="$(basename "$f")"
     base="${nome%.*}"
     primeiro="$(printf '%s' "$base" | awk -F'[-_ .(]' '{print $1}')"
@@ -326,7 +355,7 @@ scan_appsupport() {
   [ -d "$OPT_APPSUPPORT" ] || { echo "APPSUPPORT_TOTAL|0"; return; }
   for item in "$OPT_APPSUPPORT"/*; do
     [ -d "$item" ] || continue
-    if tem_quebra "$item"; then nome_invalido appsupport "$item" "$(kb_de "$item")"; continue; fi
+    if nome_ruim "$item"; then nome_invalido appsupport "$item" "$(kb_de "$item")"; continue; fi
     nome="$(basename "$item")"
     low="$(minusc "$nome")"
     case "$low" in com.apple.*) continue;; esac
@@ -369,7 +398,7 @@ scan_agentes() {
   if [ -d "$OPT_USER_AGENTS" ]; then
     for p in "$OPT_USER_AGENTS"/*.plist; do
       [ -f "$p" ] || continue
-      if tem_quebra "$p"; then nome_invalido launchagents "$p" "$(kb_de "$p")"; continue; fi
+      if nome_ruim "$p"; then nome_invalido launchagents "$p" "$(kb_de "$p")"; continue; fi
       label="$(basename "$p" .plist)"; low="$(minusc "$label")"
       classe="$(classificar_agente "$p" "$low")"
       if [ "$classe" = "desconhecido" ]; then
@@ -464,6 +493,16 @@ cmd_limpar_brew_pip() {
   return 0
 }
 
+# Serviço carregado? Confere algumas vezes, porque o desligamento pode levar um instante.
+carregado() {
+  local i=0
+  while [ "$i" -lt 5 ]; do
+    launchctl print "gui/$1/$2" >/dev/null 2>&1 || return 1
+    i=$((i+1)); [ "$i" -lt 5 ] && sleep 0.2
+  done
+  return 0
+}
+
 cmd_quarentena() {
   raiz_ok OPT_TRASH "$OPT_TRASH"
   carregar_sessao "$1"; exigir_real
@@ -498,7 +537,7 @@ cmd_quarentena() {
 cmd_remover_agente() {
   raiz_ok OPT_TRASH "$OPT_TRASH"; raiz_ok OPT_USER_AGENTS "$OPT_USER_AGENTS"
   carregar_sessao "$1"; exigir_real
-  local ids="$2" id linha cat path kb mt uid
+  local ids="$2" id linha cat path kb mt uid label
   uid="$(id -u)"
   [ -n "$ids" ] || die "itens_ausentes" 8
   for id in $(printf '%s' "$ids" | tr ',' ' '); do
@@ -510,7 +549,12 @@ cmd_remover_agente() {
     dentro_de "$path" "$OPT_USER_AGENTS" || { echo "RECUSADO|$id|so_servicos_do_usuario"; continue; }
     [ -e "$path" ] || { echo "RECUSADO|$id|nao_existe_mais"; continue; }
     [ "$(mtime_de "$path")" = "$mt" ] || { echo "RECUSADO|$id|item_mudou_desde_o_scan"; continue; }
-    launchctl bootout "gui/$uid" "$path" >/dev/null 2>&1
+    label="$(plist_val "$path" Label)"; [ -n "$label" ] || label="$(basename "$path" .plist)"
+    if carregado "$uid" "$label"; then
+      launchctl bootout "gui/$uid" "$path" >/dev/null 2>&1
+      # só move depois de confirmar que parou (achado do Codex)
+      if carregado "$uid" "$label"; then echo "RECUSADO|$id|nao_desligou"; continue; fi
+    fi
     QID_MOVIDO=""
     if mover_para_quarentena "$path" "launchagents" "$kb"; then
       registrar_feito quarentena "$kb"
@@ -543,7 +587,7 @@ listar_quarentena_kb() {
       [ -d "$c" ] || continue
       for item in "$c"/*; do
         [ -e "$item" ] || continue
-        if [ -f "$m" ] && awk -F'\t' -v p="$item" '$5==p{f=1} END{exit !f}' "$m"; then continue; fi
+        if ! tem_quebra "$item" && [ -f "$m" ] && awk -F'\t' -v p="$item" '$5==p{f=1} END{exit !f}' "$m"; then continue; fi
         dias=$(( (agora_s - dia_s) / 86400 ))
         if tem_quebra "$item"; then
           # último campo = pasta (sem o nome): o script nunca age sobre este item

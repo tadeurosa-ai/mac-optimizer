@@ -26,7 +26,10 @@ Versão esperada: 2.0.0
 5. **A quarentena ainda ocupa espaço.** Nunca chame de "liberado" o que foi para a quarentena.
 6. Quando o script responder `ERRO|...` ou `RECUSADO|...`, explique em português simples o que aconteceu.
    `sessao_vencida` ou `sessao_inexistente` → rode o scan de novo. `modo_previa` → explique que no modo prévia
-   nada é apagado.
+   nada é apagado. `nao_desligou` → o serviço não parou; nada foi movido; sugira reiniciar o Mac e tentar de novo.
+   `ocupado` → outra limpeza está mexendo na quarentena agora; espere ela terminar e tente de novo.
+   `registro_nao_gravou` → não deu para anotar o item (disco cheio ou pasta protegida); o item foi devolvido ao
+   lugar (`item_devolvido`) ou ficou na pasta indicada em `item_em=`; diga qual dos dois.
 7. Não mostre comandos ao usuário, só resultados e perguntas — exceto a linha de reinstalação (regra 2) e as
    instruções de Terminal da etapa de Time Machine.
 8. Perguntas por item sempre no mesmo formato: **[m] manter · [q] mover para a quarentena · [i] me explica mais**.
@@ -73,8 +76,8 @@ Pergunte: "Quer só **ver** o que dá para limpar (modo prévia — nada é apag
   podem ir para a quarentena.
 - `SNAPSHOTS|<n>` — quantidade de snapshots locais do Time Machine (o tamanho deles não é medido).
 - `QUARENTENA|<itens>|<MB>` — o que já está na quarentena.
-- `NOME_INVALIDO|<categoria>|<nome>|<MB>|<pasta>` — o nome tem uma quebra de linha; o script não limpa nem põe
-  na quarentena. Mostre a pasta e oriente renomear pelo Finder (**Ir > Ir para a Pasta…**); depois, rodar de novo.
+- `NOME_INVALIDO|<categoria>|<nome>|<MB>|<pasta>` — o nome tem um caractere invisível (quebra de linha ou
+  tabulação); o script não limpa nem põe na quarentena. Mostre a pasta e oriente renomear pelo Finder (**Ir > Ir para a Pasta…**); depois, rodar de novo.
 
 ## 4. Menu
 

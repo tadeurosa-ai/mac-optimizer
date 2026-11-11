@@ -52,9 +52,17 @@ case "$*" in
 esac
 exit 0
 EOF
+  # launchctl com estado: rótulos carregados ficam em <teste>/carregados
   cat > "$b/launchctl" <<'EOF'
 #!/bin/bash
 echo "launchctl $*" >> "$DUBLE_CALLS"
+F="${DUBLE_CALLS%/*}/carregados"; touch "$F"
+case "$1" in
+  print) grep -qxF "${2##*/}" "$F"; exit $?;;
+  bootout) [ "${DUBLE_BOOTOUT_FALHA:-0}" = 1 ] && exit 5
+           grep -vxF "$(basename "$3" .plist)" "$F" > "$F.x"; command mv -f "$F.x" "$F"; exit 0;;
+  bootstrap) basename "$3" .plist >> "$F"; exit 0;;
+esac
 exit 0
 EOF
   cat > "$b/tmutil" <<'EOF'
@@ -100,7 +108,7 @@ novo_ambiente() {
   export OPT_APPS_DIRS="$T/apps" OPT_SYS_AGENT_DIRS="$T/sys/LaunchAgents:$T/sys/LaunchDaemons"
   export OPT_MIN_MB_APPSUPPORT=1
   unset OPT_CACHES OPT_DOWNLOADS OPT_APPSUPPORT OPT_USER_AGENTS OPT_TRASH OPT_LOGDIR OPT_DISK OPT_SESSAO_MAX_MIN
-  unset DUBLE_BREW_NADA DUBLE_TM_N DUBLE_PGREP_ABERTO
+  unset DUBLE_BREW_NADA DUBLE_TM_N DUBLE_PGREP_ABERTO DUBLE_BOOTOUT_FALHA OPT_TRAVA_TENTATIVAS
   export PATH="$T/bin:/usr/bin:/bin:/usr/sbin:/sbin"
   TRASH="$H/.mac-optimizer-trash"
 }
@@ -164,6 +172,7 @@ novo_ambiente
 criar_agente "$H/Library/LaunchAgents" com.desconhecido.x /usr/bin/true
 criar_agente "$T/sys/LaunchDaemons" com.outro.daemon /usr/bin/true
 S="$(roda scan)"; SID="$(sessao_de "$S")"; IA="$(id_de "$S" AGENTE com.desconhecido.x)"
+echo com.desconhecido.x >> "$T/carregados"
 roda remover-agente --sessao "$SID" --itens "$IA" >/dev/null
 verifica T03 "bootout chamado para o serviço do usuário" grep -q "launchctl bootout gui/$(id -u) $H/Library/LaunchAgents/com.desconhecido.x.plist" "$CALLS"
 verifica T03b "nenhum unload" sh -c "! grep -q 'unload' '$CALLS'"
@@ -432,6 +441,68 @@ verifica T-NLe "scan sem erro; recusa pôr na quarentena e diz a pasta" sh -c \
 OUT="$(roda quarentena --sessao "$SID" --itens I1)"
 verifica T-NLf "nada entra na quarentena" sh -c "[ -e \"\$1\" ] && [ ! -e '$TRASH/manifest.tsv' ]" _ "$H/Downloads/$NL"
 verifica T-NLg "skill explica nome inválido e Finder" sh -c "grep -q 'NOME_INVALIDO' '$SKILL' && grep -q 'nome_invalido' '$SKILL' && grep -qi 'Finder' '$SKILL'"
+
+# ---------- T-TABSCAN TAB no nome nunca entra na sessão (achado do Codex) ----------
+novo_ambiente
+mkdir -p "$H/Library/Caches/Keep"; echo importante > "$H/Library/Caches/Keep/dado"
+IK="$(stat -f %i "$H/Library/Caches/Keep")"; mkdir "$H/Library/Caches/$(printf 'Keep\t0\t0\t%s' "$IK")"
+echo t > "$H/Downloads/$(printf 'a\tb.dmg')"
+S="$(roda scan 2>&1)"; SID="$(sessao_de "$S")"
+verifica T-TABSCAN "nome com TAB vira NOME_INVALIDO (cache e instalador)" sh -c \
+  "printf '%s\n' \"\$1\" | grep -q '^NOME_INVALIDO|cache|Keep 0 0 ' && printf '%s\n' \"\$1\" | grep -q '^NOME_INVALIDO|dmgs|a b.dmg|' && [ \"\$(printf '%s\n' \"\$1\" | grep -c '^CACHE|C')\" = 1 ] && ! printf '%s\n' \"\$1\" | grep -q '^INSTALADOR|I'" _ "$S"
+roda limpar-caches --sessao "$SID" --itens C2 >/dev/null
+verifica T-TABSCANb "aprovar ID inexistente não apaga a vizinha" test -e "$H/Library/Caches/Keep/dado"
+
+# ---------- T-LOCK número da quarentena nunca repete (achado do Codex) ----------
+novo_ambiente
+echo l > "$H/Downloads/l.dmg"
+S="$(roda scan)"; SID="$(sessao_de "$S")"
+mkdir -p "$TRASH/.trava"; echo $$ > "$TRASH/.trava/pid"
+OUT="$(OPT_TRAVA_TENTATIVAS=3 roda quarentena --sessao "$SID" --itens "$(id_de "$S" INSTALADOR l.dmg)")"
+verifica T-LOCK "trava ocupada: recusa e não move" sh -c "printf '%s' \"\$1\" | grep -q 'ocupado' && [ -e '$H/Downloads/l.dmg' ]" _ "$OUT"
+echo 999999 > "$TRASH/.trava/pid"
+roda quarentena --sessao "$SID" --itens "$(id_de "$S" INSTALADOR l.dmg)" >/dev/null
+verifica T-LOCKb "trava abandonada é liberada e some no fim" sh -c "[ ! -e '$H/Downloads/l.dmg' ] && [ ! -e '$TRASH/.trava' ]"
+novo_ambiente
+i=0; while [ $i -lt 6 ]; do i=$((i+1)); echo $i > "$H/Downloads/p$i.dmg"; done
+S="$(roda scan)"; SID="$(sessao_de "$S")"
+for i in 1 2 3 4 5 6; do roda quarentena --sessao "$SID" --itens "$(id_de "$S" INSTALADOR "p$i.dmg")" >/dev/null & done; wait
+verifica T-LOCKc "6 ao mesmo tempo: 6 números diferentes" sh -c "[ \"\$(cut -f1 '$TRASH/manifest.tsv' | sort -u | wc -l | tr -d ' ')\" = 6 ] && [ \"\$(wc -l < '$TRASH/manifest.tsv' | tr -d ' ')\" = 6 ]"
+
+# ---------- T-MANIF falha ao gravar o registro (achado do Codex) ----------
+novo_ambiente
+echo m1 > "$H/Downloads/m1.dmg"; echo m2 > "$H/Downloads/m2.dmg"
+S="$(roda scan)"; SID="$(sessao_de "$S")"
+roda quarentena --sessao "$SID" --itens "$(id_de "$S" INSTALADOR m1.dmg)" >/dev/null
+chmod 444 "$TRASH/manifest.tsv"
+OUT="$(roda quarentena --sessao "$SID" --itens "$(id_de "$S" INSTALADOR m2.dmg)")"
+chmod 644 "$TRASH/manifest.tsv"
+verifica T-MANIF "não diz movido; item volta para o lugar" sh -c "printf '%s' \"\$1\" | grep -q 'registro_nao_gravou' && ! printf '%s' \"\$1\" | grep -q '^MOVIDO' && [ -e '$H/Downloads/m2.dmg' ]" _ "$OUT"
+
+# ---------- T-BOOT serviço que não desligou (achado do Codex) ----------
+novo_ambiente
+criar_agente "$H/Library/LaunchAgents" com.desconhecido.b /usr/bin/true
+S="$(roda scan)"; SID="$(sessao_de "$S")"; IB="$(id_de "$S" AGENTE com.desconhecido.b)"
+echo com.desconhecido.b >> "$T/carregados"
+OUT="$(DUBLE_BOOTOUT_FALHA=1 roda remover-agente --sessao "$SID" --itens "$IB")"
+verifica T-BOOT "falhou ao desligar: recusa e não move" sh -c "printf '%s' \"\$1\" | grep -q 'nao_desligou' && [ -e '$H/Library/LaunchAgents/com.desconhecido.b.plist' ]" _ "$OUT"
+OUT="$(roda remover-agente --sessao "$SID" --itens "$IB")"
+verifica T-BOOTb "desligou: move e diz desligado" sh -c "printf '%s' \"\$1\" | grep -q '^SERVICO_DESLIGADO' && [ ! -e '$H/Library/LaunchAgents/com.desconhecido.b.plist' ]" _ "$OUT"
+novo_ambiente
+criar_agente "$H/Library/LaunchAgents" com.desconhecido.c /usr/bin/true
+S="$(roda scan)"; SID="$(sessao_de "$S")"
+OUT="$(roda remover-agente --sessao "$SID" --itens "$(id_de "$S" AGENTE com.desconhecido.c)")"
+verifica T-BOOTc "já desligado: move sem chamar bootout" sh -c "printf '%s' \"\$1\" | grep -q '^SERVICO_DESLIGADO' && ! grep -q 'bootout' '$CALLS'" _ "$OUT"
+
+# ---------- T-AWK sem aviso solto na listagem ----------
+novo_ambiente
+echo w > "$H/Downloads/w.dmg"
+S="$(roda scan)"; SID="$(sessao_de "$S")"
+roda quarentena --sessao "$SID" --itens "$(id_de "$S" INSTALADOR w.dmg)" >/dev/null
+mkdir -p "$TRASH/2026-01-05/dmgs"; echo n > "$TRASH/2026-01-05/dmgs/$(printf 'x\ny.dmg')"
+ERR="$(roda listar-quarentena 2>&1 >/dev/null)"
+verifica T-AWK "listagem sem aviso na saída de erro" test -z "$ERR"
+verifica T-SKILL2 "skill explica nao_desligou, ocupado e TAB" sh -c "grep -q 'nao_desligou' '$SKILL' && grep -q 'ocupado' '$SKILL' && grep -qi 'tabula' '$SKILL'"
 
 # ---------- T-SES sessões ----------
 novo_ambiente
