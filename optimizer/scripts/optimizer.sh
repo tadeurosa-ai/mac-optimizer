@@ -13,7 +13,7 @@
 # ============================================================
 set -u
 
-VERSAO="2.0.0"
+VERSAO="2.1.0"
 
 # ---------- Raízes (sobrescrevíveis por variável, para teste) ----------
 # Usa ${VAR-padrão}: variável definida como vazia continua vazia e a trava recusa.
@@ -28,22 +28,35 @@ OPT_LOGDIR="${OPT_LOGDIR-$HOME/Documents/Mac Optimizer/logs}"
 OPT_DISK="${OPT_DISK-/System/Volumes/Data}"
 OPT_SESSAO_MAX_MIN="${OPT_SESSAO_MAX_MIN-60}"
 OPT_MIN_MB_APPSUPPORT="${OPT_MIN_MB_APPSUPPORT-10}"
+# Limite de tempo de cada comando externo: consultas (padrão 10 s) e as duas limpezas npm/pnpm (padrão 10 min).
+OPT_LIMITE_S="${OPT_LIMITE_S:-10}"
+OPT_LIMITE_LIMPEZA_S="${OPT_LIMITE_LIMPEZA_S:-600}"
+# Pastas de modelos de IA dentro de Application Support, separadas por ":". Só aparecem (linha IA): nunca têm ID,
+# nunca entram na categoria [5] e nunca vão para a quarentena. Para ampliar, acrescente o nome aqui.
+PASTAS_IA_APPSUPPORT="multimodal-models:LM Studio:ollama:Ollama:huggingface:GPT4All:jan:Jan"
+# npm e pnpm nunca perguntam nada nem baixam o próprio gerenciador (Corepack; doc do Corepack, README).
+export COREPACK_ENABLE_NETWORK=0 COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 
 TAB="$(printf '\t')"
+CR="$(printf '\r')"
 PRAZO_DIAS=30
-# Nome para mostrar numa linha de saída: "|" vira "¦" e tab/quebra de linha viram espaço,
+# Nome para mostrar numa linha de saída: "|" vira "¦" e tab/retorno de carro/quebra de linha viram espaço,
 # para o nome nunca quebrar os campos. O caminho verdadeiro fica só na sessão / manifest.
-campo() { local s="${1//|/¦}"; s="${s//$TAB/ }"; printf '%s' "${s//$'\n'/ }"; }
+campo() { local s="${1//|/¦}"; s="${s//$TAB/ }"; s="${s//$CR/ }"; printf '%s' "${s//$'\n'/ }"; }
 # Caminho com quebra de linha não entra na sessão nem na quarentena: o script nunca age sobre ele
 # (o nome "limpo" poderia coincidir com outro arquivo). A pessoa renomeia pelo Finder.
 tem_quebra() { case "$1" in *$'\n'*) return 0;; esac; return 1; }
 # No scan, TAB também barra: a sessão é separada por tab, e um nome com tab faria o ID apontar
 # para outro item (achado da revisão do Codex). Itens antigos com TAB na quarentena seguem listáveis.
-nome_ruim() { case "$1" in *$'\n'*|*"$TAB"*) return 0;; esac; return 1; }
+# Retorno de carro (\r) também barra (2.1.0, revisão do Codex no plano).
+nome_ruim() { case "$1" in *$'\n'*|*"$TAB"*|*"$CR"*) return 0;; esac; return 1; }
 nome_invalido() { # categoria caminho kb
   echo "NOME_INVALIDO|$1|$(campo "$(basename "$2")")|$(mb_de_kb "$3")|$(campo "$(dirname "$2")")"
 }
 APPS_IDX=""
+TRAVADO=0
+NDEV=0
+SNAP_N=0
 LOGF=""
 SF=""
 MODO=""
@@ -59,8 +72,77 @@ mb_de_kb() { awk -v k="$1" 'BEGIN{printf "%.0f", k/1024}'; }
 mtime_de() { stat -f %m "$1" 2>/dev/null || echo 0; }
 inode_de() { stat -f %i "$1" 2>/dev/null || echo 0; }
 plist_val() { [ -f "$1" ] || return 0; plutil -extract "$2" raw -o - "$1" 2>/dev/null || true; }
-limpar_tmp() { [ -n "$APPS_IDX" ] && [ -f "$APPS_IDX" ] && command rm -f "$APPS_IDX"; return 0; }
+limpar_tmp() {
+  [ -n "$APPS_IDX" ] && [ -f "$APPS_IDX" ] && command rm -f "$APPS_IDX"
+  [ "$TRAVADO" = 1 ] && destravar
+  return 0
+}
 trap limpar_tmp EXIT
+
+# Roda um comando externo com limite de tempo, no bash 3.2 e sem o comando `timeout` (regra do projeto).
+# Sempre a partir da pasta pessoal (não lê .npmrc de outra pasta) e sem entrada (nada fica esperando resposta).
+# Saída do comando no stdout. Código: o do comando; 124 = estourou o limite. Ao estourar, interrompe direto o
+# processo e os filhos dele (pkill -P); nunca pelo grupo, que derrubaria o próprio script (revisão r3).
+com_limite() {
+  local lim="$1" out pid i=0 max rc
+  shift
+  out="$(mktemp -t optimizer-lim)" || return 125
+  ( cd "$HOME" 2>/dev/null || exit 125; exec "$@" ) </dev/null >"$out" 2>/dev/null &
+  pid=$!
+  max=$(( lim * 10 ))
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$i" -ge "$max" ]; then
+      disown "$pid" 2>/dev/null
+      pkill -P "$pid" 2>/dev/null; kill "$pid" 2>/dev/null
+      cat "$out"; command rm -f "$out"
+      return 124
+    fi
+    sleep 0.1; i=$((i+1))
+  done
+  wait "$pid"; rc=$?
+  cat "$out"; command rm -f "$out"
+  return "$rc"
+}
+
+# Caminho real (links resolvidos) de uma pasta que existe; vazio se não der para entrar nela.
+real_de() { ( cd -P "$1" 2>/dev/null && pwd -P ); }
+HOME_REAL="$(real_de "$HOME")"
+# Pasta real estritamente dentro da pasta pessoal real: não aceita a própria pasta pessoal, ".." nem pasta irmã
+# de nome parecido (ex.: uma pasta "anax" ao lado da pasta pessoal "ana").
+dentro_do_home() { [ -n "$1" ] && [ -n "$HOME_REAL" ] || return 1; case "$1" in "$HOME_REAL"/?*) return 0;; esac; return 1; }
+# Caminho para mostrar: dentro da pasta pessoal vira "~/...".
+# shellcheck disable=SC2088  # o "~" aqui é texto para mostrar, não para expandir
+rel() { case "$1" in "$HOME"/*) printf '~/%s' "${1#"$HOME"/}";; *) printf '%s' "$1";; esac; }
+# MB para mostrar: entre 1 KB e 1 MB vira "<1" (revisão do Codex: nunca "0" quando algo saiu).
+mb_texto() { if [ "$1" -gt 0 ] && [ "$1" -lt 1024 ]; then printf '<1'; else mb_de_kb "$1"; fi; }
+
+eh_pasta_ia() { case ":$PASTAS_IA_APPSUPPORT:" in *":$1:"*) return 0;; esac; return 1; }
+# Pastas que o script nunca apaga nem move — backups de iPhone, modelos de IA e o disco do Colima —, mesmo com ID
+# de uma sessão criada pela 2.0.0 e mesmo achadas por outra categoria (ex.: HF_HOME dentro de Caches).
+pastas_protegidas() {
+  local n old_ifs
+  printf '%s\n' "$OPT_APPSUPPORT/MobileSync" "$HOME/.ollama" "$HOME/.cache/huggingface" "$HOME/.lmstudio" "$HOME/.colima"
+  [ -n "${HF_HOME:-}" ] && printf '%s\n' "$HF_HOME"
+  old_ifs="$IFS"; IFS=':'
+  for n in $PASTAS_IA_APPSUPPORT; do printf '%s\n' "$OPT_APPSUPPORT/$n"; done
+  IFS="$old_ifs"
+  return 0
+}
+protegido() {
+  local d alvo p rp x
+  d="$(real_de "$(dirname "$1")")"; [ -n "$d" ] || d="$(dirname "$1")"
+  alvo="${d%/}/$(basename "$1")"
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    p="${p%/}"; rp="$(real_de "$p")"; [ -n "$rp" ] || rp="$p"
+    for x in "$alvo" "${1%/}"; do
+      case "$x/" in "$rp"/*|"$p"/*) return 0;; esac
+      case "$rp/" in "$x"/*) return 0;; esac
+      case "$p/" in "$x"/*) return 0;; esac
+    done
+  done < <(pastas_protegidas)
+  return 1
+}
 
 log_l() { [ -n "$LOGF" ] || return 0; printf '[%s] %s\n' "$(date +%H:%M:%S)" "$1" >> "$LOGF"; }
 
@@ -264,6 +346,11 @@ cmd_scan() {
   scan_appsupport
   scan_agentes
   scan_snapshots
+  scan_dev
+  scan_nodemod
+  scan_ia
+  scan_iphone
+  scan_sistema
   scan_quarentena_resumo
   log_l "SCAN concluído"
   echo "FIM_SCAN|$SESSAO"
@@ -281,6 +368,7 @@ scan_caches() {
       ms-playwright) echo "CACHE_MANTIDO|$(campo "$nome")|$(mb_de_kb "$kb")|navegadores de teste: apagar obriga a baixar tudo de novo"; continue;;
       Homebrew|pip) echo "CACHE_MANTIDO|$(campo "$nome")|$(mb_de_kb "$kb")|limpo pela categoria Homebrew + pip"; continue;;
     esac
+    if protegido "$item"; then echo "CACHE_MANTIDO|$(campo "$nome")|$(mb_de_kb "$kb")|modelos de IA: só mostro"; continue; fi
     if [ ! -w "$item" ]; then echo "CACHE_MANTIDO|$(campo "$nome")|$(mb_de_kb "$kb")|protegido pelo macOS"; continue; fi
     aviso=""
     if [ "${#nome}" -ge 4 ] && pgrep -if -- "$nome" >/dev/null 2>&1; then aviso="app_aberto"; fi
@@ -359,6 +447,9 @@ scan_appsupport() {
     nome="$(basename "$item")"
     low="$(minusc "$nome")"
     case "$low" in com.apple.*) continue;; esac
+    # backups de iPhone e modelos de IA: só aparecem nas linhas BACKUP_IPHONE e IA (exceção aprovada, 2.1.0)
+    [ "$nome" = "MobileSync" ] && continue
+    eh_pasta_ia "$nome" && continue
     kb="$(kb_de "$item")"
     [ "$kb" -ge "$min" ] || continue
     casa_app "$(norm "$nome")" && continue
@@ -426,10 +517,194 @@ scan_agentes() {
 }
 
 scan_snapshots() {
-  local n
   if ! command -v tmutil >/dev/null 2>&1; then echo "SNAPSHOTS|0"; return; fi
-  n="$(tmutil listlocalsnapshots / 2>/dev/null | grep -c 'com.apple.TimeMachine')"
-  echo "SNAPSHOTS|${n:-0}"
+  SNAP_N="$(com_limite "$OPT_LIMITE_S" tmutil listlocalsnapshots / | grep -c 'com.apple.TimeMachine')"
+  echo "SNAPSHOTS|${SNAP_N:-0}"
+}
+
+# ---------- Sobras de programação, modelos de IA, backups, Dados do Sistema (2.1.0) ----------
+# Só npm e pnpm recebem ID. Linha da sessão: ID categoria caminho_real kb mtime inode -
+dev_com_id() { # categoria caminho_real kb rotulo
+  NDEV=$((NDEV+1))
+  printf 'D%s\t%s\t%s\t%s\t%s\t%s\t-\n' "$NDEV" "$1" "$2" "$3" "$(mtime_de "$2")" "$(inode_de "$2")" >> "$SF"
+  echo "DEV|D$NDEV|$1|$(mb_texto "$3")|$4"
+}
+
+# Última linha da saída de uma consulta (npm config get cache / pnpm store path). Código como o de com_limite.
+consulta() { local o rc; o="$(com_limite "$OPT_LIMITE_S" "$@")"; rc=$?; printf '%s' "$o" | tail -1; return "$rc"; }
+
+scan_npm() {
+  local bruto rc pai kb
+  if ! command -v npm >/dev/null 2>&1; then
+    if [ -d "$HOME/.npm/_cacache" ]; then echo "DEV|-|npm_cache|$(mb_texto "$(kb_de "$HOME/.npm/_cacache")")|npm_fora_do_path"
+    else echo "DEV|-|npm|nao_instalado"; fi
+    return
+  fi
+  bruto="$(consulta npm config get cache)"; rc=$?
+  [ "$rc" = 124 ] && { echo "DEV|-|npm|sem_resposta"; return; }
+  if [ "$rc" != 0 ] || [ -z "$bruto" ] || nome_ruim "$bruto"; then echo "DEV|-|npm|nao_disponivel"; return; fi
+  pai="$(real_de "$bruto")"
+  if [ -z "$pai" ] || [ ! -d "$pai/_cacache" ]; then echo "DEV|-|npm_cache|0|nada_a_limpar"; return; fi
+  kb="$(kb_de "$pai/_cacache")"
+  if ! dentro_do_home "$pai" || nome_ruim "$pai"; then echo "DEV|-|npm_cache|$(mb_texto "$kb")|fora_da_pasta_pessoal"; return; fi
+  if protegido "$pai"; then echo "DEV|-|npm_cache|$(mb_texto "$kb")|protegido"; return; fi
+  dev_com_id npm_cache "$pai" "$kb" volta_sozinho
+}
+
+scan_pnpm() {
+  local bruto rc st kb
+  command -v pnpm >/dev/null 2>&1 || { echo "DEV|-|pnpm|nao_instalado"; return; }
+  bruto="$(consulta pnpm store path)"; rc=$?
+  [ "$rc" = 124 ] && { echo "DEV|-|pnpm|sem_resposta"; return; }
+  if [ "$rc" != 0 ] || [ -z "$bruto" ] || nome_ruim "$bruto"; then echo "DEV|-|pnpm|nao_disponivel"; return; fi
+  st="$(real_de "$bruto")"
+  [ -n "$st" ] || { echo "DEV|-|pnpm_store|0|nada_a_limpar"; return; }
+  kb="$(kb_de "$st")"
+  if ! dentro_do_home "$st" || nome_ruim "$st"; then echo "DEV|-|pnpm_store|$(mb_texto "$kb")|fora_da_pasta_pessoal"; return; fi
+  if protegido "$st"; then echo "DEV|-|pnpm_store|$(mb_texto "$kb")|protegido"; return; fi
+  dev_com_id pnpm_store "$st" "$kb" ate
+}
+
+# Docker (só mostra): "até X MB" = soma do UniqueSize das imagens órfãs ("UNIQUE SIZE is the amount of space
+# that's only used by a given image", doc do docker system df). O cache de build não é medido nesta versão.
+scan_docker() {
+  local rc ctx orfas tam mb
+  command -v docker >/dev/null 2>&1 || { echo "DEV|-|docker|nao_instalado"; return; }
+  com_limite "$OPT_LIMITE_S" docker info >/dev/null; rc=$?
+  [ "$rc" = 124 ] && { echo "DEV|-|docker|sem_resposta"; return; }
+  [ "$rc" = 0 ] || { echo "DEV|-|docker|parado"; return; }
+  ctx="$(consulta docker context show)"
+  orfas="$(com_limite "$OPT_LIMITE_S" docker images -f dangling=true -q --no-trunc)"; rc=$?
+  [ "$rc" = 0 ] || { echo "DEV|-|docker|sem_resposta"; return; }
+  [ -n "$orfas" ] || { echo "DEV|-|docker|0|nada_a_limpar"; return; }
+  tam="$(com_limite "$OPT_LIMITE_S" docker system df -v --format '{{range .Images}}{{.ID}} {{.UniqueSize}}{{println}}{{end}}')"; rc=$?
+  [ "$rc" = 0 ] || { echo "DEV|-|docker|sem_resposta"; return; }
+  mb="$(awk 'NR==FNR{if($1!="")o[$1]=1; next}
+    ($1 in o){v=$2; n=v; sub(/[A-Za-z]+$/,"",n); u=v; sub(/^[0-9.]+/,"",u); m=1
+      if(u=="kB"||u=="KB")m=1e3; else if(u=="MB")m=1e6; else if(u=="GB")m=1e9; else if(u=="TB")m=1e12
+      s+=n*m}
+    END{printf "%.0f", s/1048576}' <(printf '%s\n' "$orfas") <(printf '%s\n' "$tam"))"
+  if [ "${mb:-0}" = 0 ]; then echo "DEV|-|docker|0|nada_a_limpar"; else echo "DEV|-|docker|$mb|$(campo "${ctx:-docker}")"; fi
+}
+
+scan_dev() {
+  local d
+  scan_npm
+  scan_pnpm
+  d="$HOME/Library/Developer/Xcode/DerivedData"
+  [ -d "$d" ] && echo "DEV|-|xcode_deriveddata|$(mb_de_kb "$(kb_de "$d")")|volta_sozinho_mas_nao_limpo_nesta_versao"
+  d="$HOME/Library/Developer/Xcode/Archives"
+  [ -d "$d" ] && echo "DEV|-|xcode_archives|$(mb_de_kb "$(kb_de "$d")")|nao_volta"
+  scan_docker
+  # Colima: tamanho real por du (o arquivo do disco é esparso; o tamanho máximo não interessa)
+  d="$HOME/.colima/_lima/_disks"
+  [ -d "$d" ] && echo "DEV|-|colima|$(mb_de_kb "$(kb_de "$d")")|volta_ao_reiniciar"
+  return 0
+}
+
+# Dias desde a alteração mais recente de manifesto/lockfile do projeto; "-" se não houver nenhum ou a data
+# estiver no futuro. Não é "a última vez que o projeto foi usado".
+dias_manifesto() {
+  local f m maior=0 agora_s
+  for f in package.json package-lock.json pnpm-lock.yaml yarn.lock bun.lockb bun.lock; do
+    [ -f "$1/$f" ] || continue
+    m="$(mtime_de "$1/$f")"; [ "$m" -gt "$maior" ] && maior="$m"
+  done
+  agora_s="$(agora)"
+  if [ "$maior" -le 0 ] || [ "$maior" -gt "$agora_s" ]; then echo "-"; return; fi
+  echo $(( (agora_s - maior) / 86400 ))
+}
+
+# node_modules (só mostra os 10 maiores): a partir da pasta pessoal, até 8 níveis, sem seguir link, sem entrar
+# num node_modules já achado; pula Library, pastas escondidas, Fotos/Música/Filmes/Público e pacotes de app.
+scan_nodemod() {
+  local err lista f kb dias proj n p
+  err="$(mktemp -t optimizer-err)"; lista="$(mktemp -t optimizer-nm)"
+  while IFS= read -r -d '' f; do
+    nome_ruim "$f" && continue
+    proj="$(dirname "$f")"
+    printf '%s\t%s\t%s\n' "$(kb_de "$f")" "$(dias_manifesto "$proj")" "$proj" >> "$lista"
+  done < <(find "$HOME" -mindepth 1 -maxdepth 8 \( -path "$HOME/Library" -o -path "$HOME/Pictures" -o -path "$HOME/Music" \
+             -o -path "$HOME/Movies" -o -path "$HOME/Public" -o -name '.*' -o -name '*.app' -o -name '*.photoslibrary' \
+             -o -name '*.musiclibrary' \) -prune -o -type d -name node_modules -print0 -prune 2>"$err")
+  n="$(awk 'END{print NR}' "$lista")"
+  sort -t "$TAB" -k1,1nr "$lista" | head -10 | while IFS="$TAB" read -r kb dias proj; do
+    echo "NODEMOD|-|$(campo "$(rel "$proj")")|$(mb_de_kb "$kb")|$dias"
+  done
+  grep -Ei 'permission denied|not permitted' "$err" 2>/dev/null | sed -E 's/^find: (.*): [^:]*$/\1/' | sort -u | head -5 |
+    while IFS= read -r p; do echo "AVISO|sem_permissao|$(campo "$(rel "$p")")"; done
+  command rm -f "$err" "$lista"
+  echo "NODEMOD_TOTAL|$n"
+}
+
+scan_ia() {
+  local saida rc d n old_ifs
+  if command -v ollama >/dev/null 2>&1; then
+    saida="$(com_limite "$OPT_LIMITE_S" ollama list)"; rc=$?
+  else
+    rc=127
+  fi
+  if [ "$rc" = 124 ]; then
+    echo "IA|-|ollama|sem_resposta"
+  elif [ "$rc" = 0 ]; then
+    printf '%s\n' "$saida" | awk 'NR>1 && NF>=4 {
+      u=$4; m=1; if(u=="KB"||u=="kB")m=1e3; else if(u=="MB")m=1e6; else if(u=="GB")m=1e9; else if(u=="TB")m=1e12
+      mod=""; for(i=5;i<=NF;i++) mod=mod (i>5?" ":"") $i
+      gsub(/\|/,"¦",$1); gsub(/\|/,"¦",mod)
+      printf "IA|-|ollama|%s|%.0f|%s\n", $1, $3*m/1048576, mod }'
+  elif [ -d "$HOME/.ollama/models" ]; then
+    echo "IA|-|ollama|total|$(mb_de_kb "$(kb_de "$HOME/.ollama/models")")|-"
+  fi
+  d="${HF_HOME:-$HOME/.cache/huggingface}"
+  [ -d "$d" ] && echo "IA|-|huggingface|$(mb_de_kb "$(kb_de "$d")")"
+  [ -d "$HOME/.cache/whisper" ] && echo "IA|-|whisper|$(mb_de_kb "$(kb_de "$HOME/.cache/whisper")")"
+  [ -d "$HOME/.lmstudio/models" ] && echo "IA|-|lmstudio|$(mb_de_kb "$(kb_de "$HOME/.lmstudio/models")")"
+  old_ifs="$IFS"; IFS=':'
+  for n in $PASTAS_IA_APPSUPPORT; do
+    IFS="$old_ifs"
+    [ -d "$OPT_APPSUPPORT/$n" ] && echo "IA|-|appsupport|$(campo "$n")|$(mb_de_kb "$(kb_de "$OPT_APPSUPPORT/$n")")"
+    IFS=':'
+  done
+  IFS="$old_ifs"
+  return 0
+}
+
+# Backups de iPhone/iPad (só mostra; apagar só pelo Finder > aparelho > Gerenciar Backups).
+scan_iphone() {
+  local b="$OPT_APPSUPPORT/MobileSync/Backup" n err
+  [ -e "$b" ] || { echo "BACKUP_IPHONE|0|0"; return; }
+  if [ ! -r "$b" ] || [ ! -x "$b" ]; then echo "AVISO|backup_iphone_sem_permissao"; return; fi
+  err="$(mktemp -t optimizer-err)"
+  n="$(find "$b" -mindepth 1 -maxdepth 1 -type d 2>"$err" | awk 'END{print NR}')"
+  if grep -qi 'not permitted\|permission denied' "$err" 2>/dev/null; then
+    command rm -f "$err"; echo "AVISO|backup_iphone_sem_permissao"; return
+  fi
+  command rm -f "$err"
+  echo "BACKUP_IPHONE|$n|$(mb_de_kb "$(kb_de "$b")")"
+}
+
+# Dados do Sistema, parte por parte (só mostra). Volumes lidos só do container APFS do disco de "/".
+scan_sistema() {
+  local cont total=0 p
+  if command -v diskutil >/dev/null 2>&1 && command -v plutil >/dev/null 2>&1; then
+    cont="$(com_limite "$OPT_LIMITE_S" diskutil info -plist / | plutil -extract APFSContainerReference raw - 2>/dev/null)"
+    case "$cont" in ""|*[!a-z0-9]*) cont="";; esac
+    if [ -n "$cont" ]; then
+      com_limite "$OPT_LIMITE_S" diskutil apfs list "$cont" | awk '
+        /APFS Volume Disk \(Role\):/ { r=$0; sub(/.*\(/, "", r); sub(/\).*/, "", r); next }
+        /Capacity Consumed:/ { b=$0; sub(/.*Consumed:[[:space:]]*/, "", b); sub(/[[:space:]].*/, "", b)
+          n=""; if (r=="VM") n="vm"; else if (r=="Preboot") n="preboot"; else if (r=="Recovery") n="recovery"
+          if (n!="" && b ~ /^[0-9]+$/ && !(n in visto)) { visto[n]=1; printf "SISTEMA|%s|%.0f\n", n, b/1048576 }
+          r="" }'
+    fi
+  fi
+  echo "SISTEMA|snapshots|${SNAP_N:-0}"
+  echo "SISTEMA|caches|$(mb_de_kb "$(kb_de "$OPT_CACHES")")"
+  echo "SISTEMA|logs|$(mb_de_kb "$(kb_de "$HOME/Library/Logs")")"
+  for p in "$HOME/.npm" "$HOME/.ollama" "$HOME/.colima" "$HOME/.cache" "$HOME/Library/pnpm" "$HOME/Library/Developer"; do
+    [ -e "$p" ] && total=$((total + $(kb_de "$p")))
+  done
+  echo "SISTEMA|pastas_escondidas|$(mb_de_kb "$total")"
 }
 
 scan_quarentena_resumo() {
@@ -452,6 +727,7 @@ cmd_limpar_caches() {
     cat="$(printf '%s' "$linha" | cut -f2)"; path="$(printf '%s' "$linha" | cut -f3)"; inode="$(printf '%s' "$linha" | cut -f6)"
     [ "$cat" = "cache" ] || { echo "RECUSADO|$id|nao_e_cache"; continue; }
     dentro_de "$path" "$OPT_CACHES" || { echo "RECUSADO|$id|fora_da_pasta_de_caches"; continue; }
+    protegido "$path" && { echo "RECUSADO|$id|protegido"; continue; }
     [ -e "$path" ] || { echo "RECUSADO|$id|nao_existe_mais"; continue; }
     [ "$(inode_de "$path")" = "$inode" ] || { echo "RECUSADO|$id|item_mudou"; continue; }
     antes="$(kb_de "$path")"
@@ -520,6 +796,8 @@ cmd_quarentena() {
             dentro_de "$path" "$raiz" || { echo "RECUSADO|$id|fora_de_application_support"; continue; };;
       *) echo "RECUSADO|$id|categoria_nao_permitida"; continue;;
     esac
+    # backups de iPhone e modelos de IA: recusa também ID de sessão criada pela 2.0.0 (revisão do Codex)
+    protegido "$path" && { echo "RECUSADO|$id|protegido"; continue; }
     [ -e "$path" ] || { echo "RECUSADO|$id|nao_existe_mais"; continue; }
     if [ "$(kb_de "$path")" != "$kb" ] || [ "$(mtime_de "$path")" != "$mt" ]; then
       echo "RECUSADO|$id|item_mudou_desde_o_scan"; continue
@@ -532,6 +810,100 @@ cmd_quarentena() {
       echo "RECUSADO|$id|nao_moveu"
     fi
   done
+}
+
+# ---------- limpar-dev: cache do npm e store do pnpm (2.1.0) ----------
+# Instalação em andamento: lê a lista de processos uma vez (o próprio grep não entra nela).
+# npm: só install/i/ci/add/update/up/upgrade bloqueiam (npm exec e npx, usados pelos servidores MCP, não).
+instalando_npm() {
+  local p; p="$(ps -axo args= 2>/dev/null)"
+  printf '%s\n' "$p" | grep -Eq '(^|/)npm(-cli\.js)?[[:space:]]+(install|i|ci|add|update|up|upgrade)([[:space:]]|$)'
+}
+# pnpm: qualquer pnpm rodando bloqueia, menos pnpm dlx e pnpm exec.
+pnpm_rodando() {
+  local p; p="$(ps -axo args= 2>/dev/null)"
+  printf '%s\n' "$p" | grep -E '(^|/)pnpm(\.cjs|\.mjs)?([[:space:]]|$)' |
+    grep -Evq '(^|/)pnpm(\.cjs|\.mjs)?[[:space:]]+(dlx|exec)([[:space:]]|$)'
+}
+ja_limpo() { awk -F'\t' -v id="$1" '$1=="#limpo" && $2==id{f=1} END{exit !f}' "$SF"; }
+
+limpar_dev_item() {
+  local id="$1" linha cat gravado bruto rc atual alvo antes depois liberado mb errf
+  linha="$(item_da_sessao "$id")"
+  [ -n "$linha" ] || { echo "RECUSADO|$id|item_inexistente_na_sessao"; return; }
+  cat="$(printf '%s' "$linha" | cut -f2)"; gravado="$(printf '%s' "$linha" | cut -f3)"
+  case "$cat" in npm_cache|pnpm_store) ;; *) echo "RECUSADO|$id|nao_e_sobra_de_programacao"; return;; esac
+  ja_limpo "$id" && { echo "RECUSADO|$id|ja_feito"; return; }
+  if [ "$cat" = npm_cache ]; then
+    instalando_npm && { echo "RECUSADO|$id|instalacao_em_andamento"; return; }
+    command -v npm >/dev/null 2>&1 || { echo "RECUSADO|$id|npm_nao_encontrado"; return; }
+    bruto="$(consulta npm config get cache)"; rc=$?
+  else
+    pnpm_rodando && { echo "RECUSADO|$id|pnpm_rodando"; return; }
+    command -v pnpm >/dev/null 2>&1 || { echo "RECUSADO|$id|pnpm_nao_encontrado"; return; }
+    bruto="$(consulta pnpm store path)"; rc=$?
+  fi
+  [ "$rc" = 124 ] && { echo "RECUSADO|$id|sem_resposta"; return; }
+  [ "$rc" = 0 ] || { echo "RECUSADO|$id|nao_disponivel"; return; }
+  # o caminho real tem de ser o mesmo do scan e estar dentro da pasta pessoal (revisão do Codex)
+  atual="$(real_de "$bruto")"
+  { [ -n "$atual" ] && [ "$atual" = "$gravado" ]; } || { echo "RECUSADO|$id|caminho_mudou"; return; }
+  dentro_do_home "$atual" || { echo "RECUSADO|$id|fora_da_pasta_pessoal"; return; }
+  protegido "$atual" && { echo "RECUSADO|$id|protegido"; return; }
+  if [ "$cat" = npm_cache ]; then alvo="$atual/_cacache"; else alvo="$atual"; fi
+  [ -d "$alvo" ] || { echo "RECUSADO|$id|nao_existe_mais"; return; }
+  antes="$(kb_de "$alvo")"
+  if [ "$cat" = npm_cache ]; then
+    # o npm acrescenta "_cacache" sozinho: recebe a pasta-mãe (revisão r2)
+    com_limite "$OPT_LIMITE_LIMPEZA_S" npm cache clean --force --cache "$atual" >/dev/null; rc=$?
+  else
+    com_limite "$OPT_LIMITE_LIMPEZA_S" pnpm store prune >/dev/null; rc=$?
+  fi
+  # medição depois: pasta ausente = 0 (o npm apaga o _cacache inteiro); erro de leitura = não mediu, nunca 0
+  if [ ! -e "$alvo" ]; then
+    depois=0
+  else
+    errf="$(mktemp -t optimizer-err)"
+    depois="$(du -sk "$alvo" 2>"$errf" | awk 'NR==1{print $1}')"
+    if [ -s "$errf" ] || [ -z "$depois" ]; then
+      command rm -f "$errf"
+      echo "FALHOU|$id|nao_mediu"; log_l "LIMPAR_DEV categoria=$cat nao_mediu rc=$rc"; return
+    fi
+    command rm -f "$errf"
+  fi
+  liberado=$((antes - depois)); [ "$liberado" -lt 0 ] && liberado=0
+  [ "$liberado" -gt 0 ] && registrar_feito apagado "$liberado"
+  mb="$(mb_texto "$liberado")"
+  log_l "LIMPAR_DEV categoria=$cat liberado_kb=$liberado rc=$rc"
+  # decidido em KB, não em MB arredondado (revisão do Codex)
+  if [ "$liberado" -eq 0 ]; then
+    if [ "$rc" = 124 ]; then echo "FALHOU|$id|sem_resposta"
+    elif [ "$rc" = 0 ] && { [ "$cat" = pnpm_store ] || [ ! -e "$alvo" ]; }; then
+      printf '#limpo\t%s\n' "$id" >> "$SF"; echo "NADA_A_LIMPAR|$id"
+    else echo "FALHOU|$id|nada_liberado"
+    fi
+  elif [ "$rc" != 0 ] || { [ "$cat" = npm_cache ] && [ -e "$alvo" ]; }; then
+    if [ "$rc" = 124 ]; then echo "PARCIAL|$id|$mb|sem_resposta"; else echo "PARCIAL|$id|$mb"; fi
+  else
+    printf '#limpo\t%s\n' "$id" >> "$SF"
+    echo "LIBERADO|$id|$mb"
+  fi
+}
+
+cmd_limpar_dev() {
+  raiz_ok OPT_TRASH "$OPT_TRASH"
+  carregar_sessao "$1"; exigir_real
+  local ids="$2" id
+  [ -n "$ids" ] || die "itens_ausentes" 8
+  # uma limpeza por vez, da validação ao registro (mesma trava da quarentena; revisão do Codex)
+  if ! travar; then
+    for id in $(printf '%s' "$ids" | tr ',' ' '); do echo "RECUSADO|$id|ocupado"; done
+    return 0
+  fi
+  TRAVADO=1
+  for id in $(printf '%s' "$ids" | tr ',' ' '); do limpar_dev_item "$id"; done
+  destravar; TRAVADO=0
+  return 0
 }
 
 cmd_remover_agente() {
@@ -693,6 +1065,7 @@ Uso: optimizer.sh <subcomando> [opções]
   previa                    (só mostra; nada é apagado nem movido)
   limpar-caches   --sessao ID --itens C1,C2
   limpar-brew-pip --sessao ID
+  limpar-dev      --sessao ID --itens D1,D2   (cache do npm / store do pnpm)
   quarentena      --sessao ID --itens I1,S2
   remover-agente  --sessao ID --itens A1
   concluir        --sessao ID
@@ -720,6 +1093,7 @@ case "$SUB" in
   previa) cmd_scan previa;;
   limpar-caches) cmd_limpar_caches "$ARG_SESSAO" "$ARG_ITENS";;
   limpar-brew-pip) cmd_limpar_brew_pip "$ARG_SESSAO";;
+  limpar-dev) cmd_limpar_dev "$ARG_SESSAO" "$ARG_ITENS";;
   quarentena) cmd_quarentena "$ARG_SESSAO" "$ARG_ITENS";;
   remover-agente) cmd_remover_agente "$ARG_SESSAO" "$ARG_ITENS";;
   concluir) cmd_concluir "$ARG_SESSAO";;

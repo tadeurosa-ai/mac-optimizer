@@ -93,8 +93,93 @@ EOF
 #!/bin/bash
 exit 0
 EOF
+  # diskutil: por padrão falha (nenhum teste lê o disco de verdade); T-SISTEMA liga o dublê completo
+  cat > "$b/diskutil" <<'EOF'
+#!/bin/bash
+echo "diskutil $*" >> "$DUBLE_CALLS"
+[ -n "${DUBLE_DISKUTIL:-}" ] || exit 1
+case "$1 $2" in
+  "info -plist") printf '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>APFSContainerReference</key><string>disk3</string></dict></plist>\n';;
+  "apfs list") if [ "${3:-}" = disk3 ]; then sed -n '/^CONTAINER disk3$/,/^FIM disk3$/p' "$DUBLE_DISKUTIL"; else cat "$DUBLE_DISKUTIL"; fi;;
+  *) exit 1;;
+esac
+EOF
   chmod +x "$b"/*
 }
+
+# Dublês das ferramentas novas (2.1.0): só existem no teste que os cria.
+duble_npm() {
+  cat > "$T/bin/npm" <<'EOF'
+#!/bin/bash
+echo "npm $*" >> "$DUBLE_CALLS"
+case "$1 ${2:-}" in
+  "config get")
+    if [ -f .npmrc ]; then sed -n 's/^cache=//p' .npmrc; else echo "${DUBLE_NPM_CACHE:-$HOME/.npm}"; fi;;
+  "cache clean")
+    c=""; while [ $# -gt 0 ]; do [ "$1" = --cache ] && c="${2:-}"; shift; done
+    [ "${DUBLE_NPM_DEVAGAR:-0}" = 1 ] && sleep 1
+    case "${DUBLE_NPM_MODO:-normal}" in
+      nao_apaga) exit 0;;
+      sem_permissao) chmod 000 "$c/_cacache"; exit 0;;
+      metade) f="$(find "$c/_cacache" -type f | head -1)"; command rm -f "$f"; exit 1;;
+    esac
+    [ -n "$c" ] && command rm -rf "$c/_cacache"; exit 0;;
+esac
+exit 0
+EOF
+  chmod +x "$T/bin/npm"
+}
+duble_pnpm() {
+  cat > "$T/bin/pnpm" <<'EOF'
+#!/bin/bash
+echo "pnpm $*" >> "$DUBLE_CALLS"
+case "${DUBLE_PNPM_MODO:-normal}" in
+  pede_entrada) read -r _x; exit 1;;
+  trava) sleep 1003; exit 1;;
+esac
+S="${DUBLE_PNPM_STORE:-$HOME/Library/pnpm/store/v11}"
+case "$1 ${2:-}" in
+  "store path") echo "$S";;
+  "store prune") [ "${DUBLE_PNPM_MODO:-normal}" = zero ] && exit 0; command rm -rf "$S/files"; exit 0;;
+esac
+exit 0
+EOF
+  chmod +x "$T/bin/pnpm"
+}
+duble_docker() {
+  cat > "$T/bin/docker" <<'EOF'
+#!/bin/bash
+echo "docker $*" >> "$DUBLE_CALLS"
+case "$1" in
+  info) case "${DUBLE_DOCKER:-on}" in on) echo ok; exit 0;; trava) sleep 1001; exit 1;; *) exit 1;; esac;;
+  context) echo colima;;
+  images) for i in ${DUBLE_DOCKER_ORFAS:-}; do echo "$i"; done;;
+  system) printf 'sha256:aaa 1.5GB\nsha256:bbb 200MB\nsha256:ccc 3.2GB\n';;
+esac
+exit 0
+EOF
+  chmod +x "$T/bin/docker"
+}
+duble_ollama() {
+  cat > "$T/bin/ollama" <<'EOF'
+#!/bin/bash
+echo "ollama $*" >> "$DUBLE_CALLS"
+[ "${DUBLE_OLLAMA:-on}" = trava ] && { sleep 1002; exit 1; }
+[ "$1" = list ] && { echo "NAME   ID   SIZE   MODIFIED"; echo "modelo-a:8b   abc123   5.2 GB   3 weeks ago"; }
+exit 0
+EOF
+  chmod +x "$T/bin/ollama"
+}
+# Processo falso de verdade (não dublê de pgrep): um executável chamado npm/pnpm que dorme.
+processo_falso() { # nome args...
+  local nome="$1"; shift
+  mkdir -p "$T/falsos"
+  printf '#!/bin/bash\nsleep 30\n' > "$T/falsos/$nome"; chmod +x "$T/falsos/$nome"
+  "$T/falsos/$nome" "$@" 2>/dev/null & FALSO_PID=$!; disown "$FALSO_PID" 2>/dev/null
+  sleep 0.3
+}
+sem_falso() { pkill -P "$FALSO_PID" 2>/dev/null; kill "$FALSO_PID" 2>/dev/null; return 0; }
+soma_arvore() { find "$1" \( -path "$1/.mac-optimizer-trash" -o -path "$1/Documents" \) -prune -o -type f -exec stat -f '%N %z %m' {} + 2>/dev/null | sort | cksum; }
 
 novo_ambiente() {
   T="$(mktemp -d -t optimizer-teste)"
@@ -109,6 +194,8 @@ novo_ambiente() {
   export OPT_MIN_MB_APPSUPPORT=1
   unset OPT_CACHES OPT_DOWNLOADS OPT_APPSUPPORT OPT_USER_AGENTS OPT_TRASH OPT_LOGDIR OPT_DISK OPT_SESSAO_MAX_MIN
   unset DUBLE_BREW_NADA DUBLE_TM_N DUBLE_PGREP_ABERTO DUBLE_BOOTOUT_FALHA OPT_TRAVA_TENTATIVAS
+  unset DUBLE_DISKUTIL DUBLE_NPM_CACHE DUBLE_NPM_MODO DUBLE_NPM_DEVAGAR DUBLE_PNPM_MODO DUBLE_PNPM_STORE \
+        DUBLE_DOCKER DUBLE_DOCKER_ORFAS DUBLE_OLLAMA HF_HOME OPT_LIMITE_S OPT_LIMITE_LIMPEZA_S
   export PATH="$T/bin:/usr/bin:/bin:/usr/sbin:/sbin"
   TRASH="$H/.mac-optimizer-trash"
 }
@@ -558,6 +645,303 @@ verifica T-DMI "disable-model-invocation e chamadas com bash" sh -c \
 V_SCRIPT="$(/bin/bash "$SCRIPT" versao | cut -d'|' -f2)"
 verifica T-GUARDA "skill confere versão e proíbe limpar fora do script" sh -c \
   "grep -qi 'versão esperada: $V_SCRIPT' '$SKILL' && grep -qi 'nunca execute limpeza fora do script' '$SKILL' && grep -qi 'reinstal' '$SKILL'"
+
+# ====================== Fase 2 (2.1.0) ======================
+linha_de() { printf '%s\n' "$1" | grep -F -- "$2" | head -1; }
+
+# ---------- T-NPM ----------
+novo_ambiente; duble_npm
+mkdir -p "$H/.npm/_cacache/x"; mb "$H/.npm/_cacache/x/f" 3
+S="$(roda scan)"; SID="$(sessao_de "$S")"; ID="$(id_de "$S" DEV npm_cache)"
+verifica T-NPM "scan mostra o cache do npm com ID e 3 MB" sh -c "printf '%s' \"\$1\" | grep -q '^DEV|D[0-9]*|npm_cache|3|volta_sozinho'" _ "$S"
+OUT="$(roda limpar-dev --sessao "$SID" --itens "$ID")"
+HR="$(cd -P "$H" && pwd -P)"   # caminho real (no macOS /var é link para /private/var)
+verifica T-NPMb "chama npm cache clean com a pasta-mãe e o cache esvazia" sh -c \
+  "grep -qxF -- 'npm cache clean --force --cache $HR/.npm' '$CALLS' && [ ! -e '$H/.npm/_cacache' ] && printf '%s' \"\$1\" | grep -q '^LIBERADO|$ID|3'" _ "$OUT"
+novo_ambiente; duble_npm
+mkdir -p "$H/.npm/_cacache"; mb "$H/.npm/_cacache/f" 2
+S="$(roda scan)"; SID="$(sessao_de "$S")"; ID="$(id_de "$S" DEV npm_cache)"
+OUT="$(DUBLE_NPM_MODO=nao_apaga roda limpar-dev --sessao "$SID" --itens "$ID")"
+verifica T-NPMc "npm que não apaga nada = falha, não sucesso" sh -c "printf '%s' \"\$1\" | grep -q '^FALHOU|$ID|nada_liberado' && ! printf '%s' \"\$1\" | grep -q '^LIBERADO'" _ "$OUT"
+
+# ---------- T-NPM-CACHE ----------
+novo_ambiente; duble_npm
+mkdir -p "$H/.npm/_cacache" "$H/trabalho" "$H/outro/_cacache"; mb "$H/.npm/_cacache/f" 1; mb "$H/outro/_cacache/g" 1
+echo "cache=$H/outro" > "$H/trabalho/.npmrc"
+S="$(cd "$H/trabalho" && roda scan)"; SID="$(sessao_de "$S")"; ID="$(id_de "$S" DEV npm_cache)"
+(cd "$H/trabalho" && roda limpar-dev --sessao "$SID" --itens "$ID" >/dev/null)
+verifica T-NPM-CACHE ".npmrc de outra pasta não muda o cache limpo" sh -c "[ ! -e '$H/.npm/_cacache' ] && [ -e '$H/outro/_cacache/g' ]"
+novo_ambiente
+mkdir -p "$H/.npm/_cacache"; mb "$H/.npm/_cacache/f" 2
+S="$(roda scan)"
+verifica T-NPM-CACHEb "npm fora do PATH com cache presente: tamanho sem ID" sh -c "printf '%s' \"\$1\" | grep -q '^DEV|-|npm_cache|2|npm_fora_do_path'" _ "$S"
+
+# ---------- T-NPM-INSTALANDO / T-NPM-EXEC (processo falso de verdade) ----------
+novo_ambiente; duble_npm
+mkdir -p "$H/.npm/_cacache"; mb "$H/.npm/_cacache/f" 1
+S="$(roda scan)"; SID="$(sessao_de "$S")"; ID="$(id_de "$S" DEV npm_cache)"
+processo_falso npm install lodash
+OUT="$(roda limpar-dev --sessao "$SID" --itens "$ID")"; sem_falso
+verifica T-NPM-INSTALANDO "npm install rodando: recusa e não chama o clean" sh -c "printf '%s' \"\$1\" | grep -q 'instalacao_em_andamento' && ! grep -q 'cache clean' '$CALLS' && [ -e '$H/.npm/_cacache/f' ]" _ "$OUT"
+processo_falso npm exec @algum/servidor-mcp
+OUT="$(roda limpar-dev --sessao "$SID" --itens "$ID")"; sem_falso
+verifica T-NPM-EXEC "npm exec rodando não bloqueia" sh -c "printf '%s' \"\$1\" | grep -q '^LIBERADO|$ID'" _ "$OUT"
+novo_ambiente; duble_npm
+mkdir -p "$H/.npm/_cacache"; mb "$H/.npm/_cacache/f" 1
+S="$(roda scan)"; SID="$(sessao_de "$S")"; ID="$(id_de "$S" DEV npm_cache)"
+processo_falso npx algo
+OUT="$(roda limpar-dev --sessao "$SID" --itens "$ID")"; sem_falso
+verifica T-NPM-EXECb "npx rodando não bloqueia" sh -c "printf '%s' \"\$1\" | grep -q '^LIBERADO|$ID'" _ "$OUT"
+
+# ---------- T-PNPM ----------
+novo_ambiente; duble_pnpm
+P="$H/Library/pnpm/store/v11"; mkdir -p "$P/files"; mb "$P/files/a" 2
+S="$(roda scan)"; SID="$(sessao_de "$S")"; ID="$(id_de "$S" DEV pnpm_store)"
+verifica T-PNPM "scan mostra o store do pnpm com ID e 'ate'" sh -c "printf '%s' \"\$1\" | grep -q '^DEV|D[0-9]*|pnpm_store|2|ate'" _ "$S"
+OUT="$(roda limpar-dev --sessao "$SID" --itens "$ID")"
+verifica T-PNPMb "pnpm store prune chamado e espaço liberado" sh -c "grep -q 'pnpm store prune' '$CALLS' && [ ! -e '$P/files' ] && printf '%s' \"\$1\" | grep -q '^LIBERADO|$ID|2'" _ "$OUT"
+for comando in "add react" "-r install" "--filter web add react" "dev"; do
+  novo_ambiente; duble_pnpm
+  P="$H/Library/pnpm/store/v11"; mkdir -p "$P/files"; mb "$P/files/a" 1
+  S="$(roda scan)"; SID="$(sessao_de "$S")"; ID="$(id_de "$S" DEV pnpm_store)"
+  # shellcheck disable=SC2086
+  processo_falso pnpm $comando
+  OUT="$(roda limpar-dev --sessao "$SID" --itens "$ID")"; sem_falso
+  verifica "T-PNPM-RODANDO($comando)" "pnpm rodando: recusa pnpm_rodando" sh -c "printf '%s' \"\$1\" | grep -q 'pnpm_rodando' && [ -e '$P/files/a' ]" _ "$OUT"
+done
+for comando in "dlx create-x" "exec tsc"; do
+  novo_ambiente; duble_pnpm
+  P="$H/Library/pnpm/store/v11"; mkdir -p "$P/files"; mb "$P/files/a" 1
+  S="$(roda scan)"; SID="$(sessao_de "$S")"; ID="$(id_de "$S" DEV pnpm_store)"
+  # shellcheck disable=SC2086
+  processo_falso pnpm $comando
+  OUT="$(roda limpar-dev --sessao "$SID" --itens "$ID")"; sem_falso
+  verifica "T-PNPM-DLX($comando)" "pnpm dlx/exec não bloqueia" sh -c "printf '%s' \"\$1\" | grep -q '^LIBERADO|$ID'" _ "$OUT"
+done
+novo_ambiente; duble_pnpm
+P="$H/Library/pnpm/store/v11"; mkdir -p "$P/files"; mb "$P/files/a" 1
+S="$(roda scan)"; SID="$(sessao_de "$S")"; ID="$(id_de "$S" DEV pnpm_store)"
+mkdir -p "$H/outro-store/files"
+OUT="$(DUBLE_PNPM_STORE="$H/outro-store" roda limpar-dev --sessao "$SID" --itens "$ID")"
+verifica T-PNPMc "store mudou entre scan e ação: recusa" sh -c "printf '%s' \"\$1\" | grep -q 'caminho_mudou' && ! grep -q 'store prune' '$CALLS'" _ "$OUT"
+
+# ---------- T-CAMINHO ----------
+novo_ambiente; duble_npm
+FORA="$T/fora-do-home"; mkdir -p "$FORA/_cacache"; mb "$FORA/_cacache/f" 1
+ln -s "$FORA" "$H/link-npm"
+S="$(DUBLE_NPM_CACHE="$H/link-npm" roda scan)"
+verifica T-CAMINHO "link para fora do HOME: sem ID" sh -c "printf '%s' \"\$1\" | grep -q '^DEV|-|npm_cache|1|fora_da_pasta_pessoal'" _ "$S"
+S="$(DUBLE_NPM_CACHE="$H/../fora-do-home" roda scan)"
+verifica T-CAMINHOb "'..' para fora do HOME: sem ID" sh -c "printf '%s' \"\$1\" | grep -q '^DEV|-|npm_cache|1|fora_da_pasta_pessoal'" _ "$S"
+mkdir -p "${H}x-npm/_cacache"
+S="$(DUBLE_NPM_CACHE="${H}x-npm" roda scan)"
+verifica T-CAMINHOc "pasta irmã de nome parecido: sem ID" sh -c "printf '%s' \"\$1\" | grep -q '^DEV|-|npm_cache|.*|fora_da_pasta_pessoal'" _ "$S"
+verifica T-CAMINHOd "nada fora do HOME foi apagado" test -e "$FORA/_cacache/f"
+novo_ambiente; duble_npm
+mkdir -p "$H/.npm/_cacache" "$H/npm2/_cacache"; mb "$H/.npm/_cacache/f" 1; mb "$H/npm2/_cacache/f" 1
+S="$(roda scan)"; SID="$(sessao_de "$S")"; ID="$(id_de "$S" DEV npm_cache)"
+OUT="$(DUBLE_NPM_CACHE="$H/npm2" roda limpar-dev --sessao "$SID" --itens "$ID")"
+verifica T-CAMINHOe "cache mudou entre scan e ação: recusa" sh -c "printf '%s' \"\$1\" | grep -q 'caminho_mudou' && [ -e '$H/.npm/_cacache/f' ] && [ -e '$H/npm2/_cacache/f' ]" _ "$OUT"
+
+# ---------- T-KB / medição ----------
+novo_ambiente; duble_npm
+mkdir -p "$H/.npm/_cacache"; dd if=/dev/zero of="$H/.npm/_cacache/f" bs=1024 count=300 2>/dev/null
+S="$(roda scan)"; SID="$(sessao_de "$S")"; ID="$(id_de "$S" DEV npm_cache)"
+OUT="$(roda limpar-dev --sessao "$SID" --itens "$ID")"
+verifica T-KB "300 KB apagados = 'menos de 1 MB', não falha" sh -c "printf '%s' \"\$1\" | grep -q '^LIBERADO|$ID|<1'" _ "$OUT"
+novo_ambiente; duble_pnpm
+P="$H/Library/pnpm/store/v11"; mkdir -p "$P/files"; mb "$P/files/a" 1
+S="$(roda scan)"; SID="$(sessao_de "$S")"; ID="$(id_de "$S" DEV pnpm_store)"
+OUT="$(DUBLE_PNPM_MODO=zero roda limpar-dev --sessao "$SID" --itens "$ID")"
+verifica T-KBb "pnpm sem nada a tirar = NADA_A_LIMPAR" sh -c "printf '%s' \"\$1\" | grep -q '^NADA_A_LIMPAR|$ID'" _ "$OUT"
+novo_ambiente; duble_npm
+mkdir -p "$H/.npm/_cacache/d"; mb "$H/.npm/_cacache/d/f" 1
+S="$(roda scan)"; SID="$(sessao_de "$S")"; ID="$(id_de "$S" DEV npm_cache)"
+OUT="$(DUBLE_NPM_MODO=sem_permissao roda limpar-dev --sessao "$SID" --itens "$ID")"
+chmod 755 "$H/.npm/_cacache" 2>/dev/null
+verifica T-KBc "não deu para medir depois = nao_mediu, nunca 0 liberado" sh -c "printf '%s' \"\$1\" | grep -q '^FALHOU|$ID|nao_mediu'" _ "$OUT"
+novo_ambiente; duble_npm
+mkdir -p "$H/.npm/_cacache"; mb "$H/.npm/_cacache/f1" 1; mb "$H/.npm/_cacache/f2" 1
+S="$(roda scan)"; SID="$(sessao_de "$S")"; ID="$(id_de "$S" DEV npm_cache)"
+OUT="$(DUBLE_NPM_MODO=metade roda limpar-dev --sessao "$SID" --itens "$ID")"
+verifica T-KBd "apagou parte e saiu com erro = PARCIAL" sh -c "printf '%s' \"\$1\" | grep -q '^PARCIAL|$ID'" _ "$OUT"
+OUT="$(roda limpar-dev --sessao "$SID" --itens "$ID")"
+verifica T-KBe "PARCIAL não marca feito: dá para tentar de novo" sh -c "printf '%s' \"\$1\" | grep -q '^LIBERADO|$ID'" _ "$OUT"
+
+# ---------- T-LIMPAR-DUPLO / T-CONCLUIR2 ----------
+novo_ambiente; duble_npm
+mkdir -p "$H/.npm/_cacache"; mb "$H/.npm/_cacache/f" 4
+S="$(roda scan)"; SID="$(sessao_de "$S")"; ID="$(id_de "$S" DEV npm_cache)"
+DUBLE_NPM_DEVAGAR=1 roda limpar-dev --sessao "$SID" --itens "$ID" > "$T/o1" & P1=$!
+DUBLE_NPM_DEVAGAR=1 roda limpar-dev --sessao "$SID" --itens "$ID" > "$T/o2" & P2=$!
+wait "$P1" "$P2"
+verifica T-LIMPAR-DUPLO "duas ao mesmo tempo: uma limpa, a outra recusa" sh -c \
+  "[ \"\$(cat '$T/o1' '$T/o2' | grep -c '^LIBERADO')\" = 1 ] && cat '$T/o1' '$T/o2' | grep -Eq 'ja_feito|ocupado'"
+OUT="$(roda concluir --sessao "$SID")"
+verifica T-CONCLUIR2 "concluir soma o liberado uma vez só (4 MB)" sh -c "printf '%s' \"\$1\" | grep -q 'apagado_mb=4|'" _ "$OUT"
+
+# ---------- T-PREV2 ----------
+novo_ambiente; duble_npm; duble_pnpm
+mkdir -p "$H/.npm/_cacache" "$H/Library/pnpm/store/v11/files"; mb "$H/.npm/_cacache/f" 1; mb "$H/Library/pnpm/store/v11/files/a" 1
+A="$(soma_arvore "$H")"
+S="$(roda previa)"; SID="$(sessao_de "$S")"; ID="$(id_de "$S" DEV npm_cache)"
+roda limpar-dev --sessao "$SID" --itens "$ID" >/dev/null; C=$?
+verifica T-PREV2 "prévia: limpar-dev recusado (código 7) e nada mudou" sh -c "[ '$C' = 7 ] && [ -e '$H/.npm/_cacache/f' ] && ! grep -q 'cache clean' '$CALLS'"
+verifica T-PREV2b "prévia: arquivos do HOME falso iguais antes/depois (fora sessão e log)" test "$A" = "$(soma_arvore "$H")"
+
+# ---------- T-DOCKER / T-DOCKER-OFF ----------
+novo_ambiente; duble_docker
+S="$(DUBLE_DOCKER_ORFAS="" roda scan)"
+verifica T-DOCKER "sem imagens órfãs: nada_a_limpar, sem ID" sh -c "printf '%s' \"\$1\" | grep -q '^DEV|-|docker|0|nada_a_limpar'" _ "$S"
+S="$(DUBLE_DOCKER_ORFAS="sha256:bbb" roda scan)"
+verifica T-DOCKERb "órfã de 200MB: 'até' ~190 MB, sem ID" sh -c "printf '%s' \"\$1\" | grep -Eq '^DEV\\|-\\|docker\\|19[0-9]\\|colima'" _ "$S"
+verifica T-DOCKERc "nunca chama prune, rm, volume ou container" sh -c "! grep -Eq '^docker(.* )? ?(prune|rm|rmi|volume|container)( |\$)' '$CALLS'"
+S="$(DUBLE_DOCKER=off roda scan)"
+verifica T-DOCKER-OFF "serviço parado: 'parado' e o scan termina" sh -c "printf '%s' \"\$1\" | grep -q '^DEV|-|docker|parado' && printf '%s' \"\$1\" | grep -q '^FIM_SCAN'" _ "$S"
+
+# ---------- T-LIMITE (comando que nunca termina) ----------
+novo_ambiente; duble_docker; duble_ollama
+INI="$(date +%s)"
+S="$(OPT_LIMITE_S=1 DUBLE_DOCKER=trava DUBLE_OLLAMA=trava roda scan)"
+FIM="$(date +%s)"
+verifica T-LIMITE "docker e ollama travados: scan termina e marca sem_resposta" sh -c \
+  "printf '%s' \"\$1\" | grep -q '^DEV|-|docker|sem_resposta' && printf '%s' \"\$1\" | grep -q '^IA|-|ollama|sem_resposta' && printf '%s' \"\$1\" | grep -q '^FIM_SCAN' && [ $((FIM-INI)) -le 6 ]" _ "$S"
+sleep 0.3
+verifica T-LIMITEb "nenhum processo do dublê sobra vivo" sh -c "! ps -axo args= | grep -Eq '^sleep 100[12]\$|$T/bin/(docker|ollama) '"
+
+# ---------- T-COREPACK ----------
+novo_ambiente; duble_pnpm
+INI="$(date +%s)"
+S="$(OPT_LIMITE_S=1 DUBLE_PNPM_MODO=pede_entrada roda scan)"
+verifica T-COREPACK "pnpm que pede entrada não trava: nao_disponivel" sh -c "printf '%s' \"\$1\" | grep -q '^DEV|-|pnpm|nao_disponivel'" _ "$S"
+S="$(OPT_LIMITE_S=1 DUBLE_PNPM_MODO=trava roda scan)"; FIM="$(date +%s)"
+verifica T-COREPACKb "pnpm que fica baixando: sem_resposta e o scan termina" sh -c "printf '%s' \"\$1\" | grep -q '^DEV|-|pnpm|sem_resposta' && [ $((FIM-INI)) -le 8 ]" _ "$S"
+
+# ---------- T-COLIMA ----------
+novo_ambiente
+mkdir -p "$H/.colima/_lima/_disks/colima"; dd if=/dev/zero of="$H/.colima/_lima/_disks/colima/datadisk" bs=1 count=0 seek=2147483648 2>/dev/null
+S="$(roda scan)"
+verifica T-COLIMA "disco esparso: mostra o du (~0), não os 2 GB do ls" sh -c "printf '%s' \"\$1\" | grep -q '^DEV|-|colima|0|volta_ao_reiniciar' && ! grep -q '^colima' '$CALLS'" _ "$S"
+
+# ---------- T-IA ----------
+novo_ambiente; duble_ollama
+mkdir -p "$H/.cache/huggingface/hub" "$H/.cache/whisper" "$H/.lmstudio/models"
+mb "$H/.cache/huggingface/hub/m" 2; mb "$H/.cache/whisper/w" 1; mb "$H/.lmstudio/models/l" 1
+S="$(roda scan)"
+verifica T-IA "modelos aparecem sem ID" sh -c "printf '%s' \"\$1\" | grep -q '^IA|-|ollama|modelo-a:8b|' && printf '%s' \"\$1\" | grep -q '^IA|-|huggingface|2' && printf '%s' \"\$1\" | grep -q '^IA|-|whisper|1' && printf '%s' \"\$1\" | grep -q '^IA|-|lmstudio|1'" _ "$S"
+verifica T-IAb "ollama rm nunca é chamado" sh -c "! grep -q '^ollama rm' '$CALLS'"
+SID="$(sessao_de "$S")"
+OUT="$(roda limpar-dev --sessao "$SID" --itens D99)"
+verifica T-IAc "ID inventado recusado" sh -c "printf '%s' \"\$1\" | grep -q 'item_inexistente_na_sessao'" _ "$OUT"
+
+# ---------- T-IPHONE ----------
+novo_ambiente
+B="$H/Library/Application Support/MobileSync/Backup"; mkdir -p "$B/aparelho1" "$B/aparelho2"; mb "$B/aparelho1/f" 2
+S="$(roda scan)"
+verifica T-IPHONE "backups contados, nada tocado" sh -c "printf '%s' \"\$1\" | grep -q '^BACKUP_IPHONE|2|2' && [ -e '$B/aparelho1/f' ]" _ "$S"
+chmod 000 "$B"
+S="$(roda scan)"; chmod 755 "$B"
+verifica T-IPHONEb "sem permissão: aviso e o scan termina" sh -c "printf '%s' \"\$1\" | grep -q '^AVISO|backup_iphone_sem_permissao' && printf '%s' \"\$1\" | grep -q '^FIM_SCAN'" _ "$S"
+
+# ---------- T-APPSUP-EXC / T-APPSUP-AGIR ----------
+novo_ambiente
+mkdir -p "$H/Library/Application Support/MobileSync/Backup/x" "$H/Library/Application Support/multimodal-models"
+mb "$H/Library/Application Support/MobileSync/Backup/x/f" 2; mb "$H/Library/Application Support/multimodal-models/m" 2
+S="$(roda scan)"; SID="$(sessao_de "$S")"
+verifica T-APPSUP-EXC "MobileSync e modelos fora da categoria [5]" sh -c "! printf '%s' \"\$1\" | grep -Eq '^APPSUPPORT\\|.*(MobileSync|multimodal-models)' && printf '%s' \"\$1\" | grep -q '^IA|-|appsupport|multimodal-models|2'" _ "$S"
+OUT="$(roda quarentena --sessao "$SID" --itens S1)"
+verifica T-APPSUP-EXCb "ID forjado recusado e nada movido" sh -c "! printf '%s' \"\$1\" | grep -q '^MOVIDO' && [ -e '$H/Library/Application Support/MobileSync/Backup/x/f' ]" _ "$OUT"
+novo_ambiente
+ANTIGO="$T/optimizer-2.0.0.sh"
+if git -C "$REPO" show 407fda7:optimizer/scripts/optimizer.sh > "$ANTIGO" 2>/dev/null; then
+  mkdir -p "$H/Library/Application Support/MobileSync/Backup/x"; mb "$H/Library/Application Support/MobileSync/Backup/x/f" 2
+  S="$(/bin/bash "$ANTIGO" scan)"; SID="$(sessao_de "$S")"; IDV="$(id_de "$S" APPSUPPORT MobileSync)"
+  OUT="$(roda quarentena --sessao "$SID" --itens "$IDV")"
+  verifica T-APPSUP-AGIR "sessão da 2.0.0 com ID de MobileSync: recusa protegido" sh -c "[ -n '$IDV' ] && printf '%s' \"\$1\" | grep -q '^RECUSADO|$IDV|protegido' && [ -e '$H/Library/Application Support/MobileSync/Backup/x/f' ]" _ "$OUT"
+else
+  falha T-APPSUP-AGIR "não deu para obter o script 2.0.0 do git"
+fi
+novo_ambiente
+export HF_HOME="$H/Library/Caches/hf"; mkdir -p "$HF_HOME/hub"; mb "$HF_HOME/hub/m" 1
+S="$(roda scan)"; unset HF_HOME
+verifica T-APPSUP-AGIRb "HF_HOME dentro de Caches: não vira cache limpável" sh -c "! printf '%s' \"\$1\" | grep -q '^CACHE|C[0-9]*|hf|'" _ "$S"
+
+# ---------- T-NODEMOD* ----------
+novo_ambiente
+nm() { mkdir -p "$H/$1/node_modules/pkg"; mb "$H/$1/node_modules/pkg/f" "${2:-1}"; echo '{}' > "$H/$1/package.json"; }
+nm "p/a/b/c/d/e/f"            # node_modules no nível 8
+nm "q/a/b/c/d/e/f/g"          # nível 9: não acha
+nm "Documents/proj-doc"; nm "Desktop/proj-mesa"
+nm "Library/proj-lib"; nm ".escondida/proj"; nm "Pictures/proj"; nm "App.app/proj"; nm "Fotos.photoslibrary/proj"
+mkdir -p "$H/proj-pai/node_modules/dep/node_modules/x"; mb "$H/proj-pai/node_modules/dep/node_modules/x/f" 1; echo '{}' > "$H/proj-pai/package.json"
+ln -s "$H/p" "$H/link-p"
+S="$(roda scan)"
+verifica T-NODEMOD "acha no nível 8, não no 9" sh -c "printf '%s' \"\$1\" | grep -q '^NODEMOD|-|.*p/a/b/c/d/e/f|' && ! printf '%s' \"\$1\" | grep -q 'q/a/b/c/d/e/f/g'" _ "$S"
+verifica T-NODEMOD-PULA "pula Biblioteca, escondida, Fotos, pacotes de app, link e node_modules dentro de node_modules" sh -c \
+  "! printf '%s' \"\$1\" | grep -Eq '^NODEMOD.*(Library/proj-lib|\\.escondida|Pictures/proj|App\\.app|photoslibrary|link-p|node_modules/dep)' && printf '%s' \"\$1\" | grep -q '^NODEMOD|-|.*proj-pai|'" _ "$S"
+verifica T-NODEMOD-PULAb "acha em Documentos e na Mesa" sh -c "printf '%s' \"\$1\" | grep -q 'Documents/proj-doc' && printf '%s' \"\$1\" | grep -q 'Desktop/proj-mesa'" _ "$S"
+chmod 000 "$H/Documents"
+S="$(OPT_LOGDIR="$T/logs" roda scan)"; chmod 755 "$H/Documents"
+verifica T-NODEMOD-PERM "Documentos sem permissão: aviso e o scan termina" sh -c "printf '%s' \"\$1\" | grep -q '^AVISO|sem_permissao|.*Documents' && printf '%s' \"\$1\" | grep -q '^FIM_SCAN'" _ "$S"
+novo_ambiente
+i=1; while [ "$i" -le 12 ]; do mkdir -p "$H/proj$i/node_modules"; mb "$H/proj$i/node_modules/f" "$i"; i=$((i+1)); done
+S="$(roda scan)"
+verifica T-NODEMOD-PERMb "só os 10 maiores" sh -c "[ \"\$(printf '%s\n' \"\$1\" | grep -c '^NODEMOD|-|')\" = 10 ] && ! printf '%s' \"\$1\" | grep -q 'proj1|'" _ "$S"
+novo_ambiente
+mkdir -p "$H/velho/node_modules" "$H/sem-manifesto/node_modules"; mb "$H/velho/node_modules/f" 1; mb "$H/sem-manifesto/node_modules/f" 1
+echo '{}' > "$H/velho/package.json"; echo x > "$H/velho/pnpm-lock.yaml"; echo x > "$H/velho/bun.lock"
+touch -t 202601010000 "$H/velho/package.json"; touch -t 202601010000 "$H/velho/pnpm-lock.yaml"
+touch -t "$(date -v-10d +%Y%m%d%H%M)" "$H/velho/bun.lock"
+S="$(roda scan)"
+verifica T-NODEMOD-DIAS "dias pelo arquivo mais recente (bun.lock: 10 dias); sem manifesto: '-'" sh -c \
+  "printf '%s' \"\$1\" | grep -Eq '^NODEMOD\\|-\\|.*velho\\|1\\|1[01]$' && printf '%s' \"\$1\" | grep -q '^NODEMOD|-|.*sem-manifesto|1|-$'" _ "$S"
+
+# ---------- T-SISTEMA ----------
+novo_ambiente
+FIX="$T/apfs.txt"
+cat > "$FIX" <<'EOF'
+CONTAINER disk3
+    |   APFS Volume Disk (Role):   disk3s1 (System)
+    |   Capacity Consumed:         13761384448 B (13.8 GB)
+    |   APFS Volume Disk (Role):   disk3s2 (Preboot)
+    |   Capacity Consumed:         9689440256 B (9.7 GB)
+    |   APFS Volume Disk (Role):   disk3s3 (Recovery)
+    |   Capacity Consumed:         1519566848 B (1.5 GB)
+    |   APFS Volume Disk (Role):   disk3s6 (VM)
+    |   Capacity Consumed:         15032414208 B (15.0 GB)
+    |   APFS Volume Disk (Role):   disk3s7 (No specific role)
+    |   Capacity Consumed:         1048576 B (1.0 MB)
+FIM disk3
+CONTAINER disk5
+    |   APFS Volume Disk (Role):   disk5s1 (VM)
+    |   Capacity Consumed:         99999999999 B (100.0 GB)
+FIM disk5
+EOF
+S="$(DUBLE_DISKUTIL="$FIX" roda scan)"
+verifica T-SISTEMA "lê só o container de / (VM 14336 MB, não o do disco externo)" sh -c \
+  "printf '%s' \"\$1\" | grep -q '^SISTEMA|vm|14336' && printf '%s' \"\$1\" | grep -q '^SISTEMA|preboot|9241' && printf '%s' \"\$1\" | grep -q '^SISTEMA|recovery|1449' && ! printf '%s' \"\$1\" | grep -q '95367'" _ "$S"
+S="$(roda scan)"
+verifica T-SISTEMAb "diskutil falha: sem linhas de volume e o scan termina" sh -c "! printf '%s' \"\$1\" | grep -q '^SISTEMA|vm' && printf '%s' \"\$1\" | grep -q '^SISTEMA|snapshots|' && printf '%s' \"\$1\" | grep -q '^FIM_SCAN'" _ "$S"
+
+# ---------- T-SEM-FERRAMENTA ----------
+novo_ambiente
+S="$(roda scan)"
+verifica T-SEM-FERRAMENTA "sem npm/pnpm/docker/ollama: nao_instalado e o scan termina" sh -c \
+  "printf '%s' \"\$1\" | grep -q '^DEV|-|npm|nao_instalado' && printf '%s' \"\$1\" | grep -q '^DEV|-|pnpm|nao_instalado' && printf '%s' \"\$1\" | grep -q '^DEV|-|docker|nao_instalado' && printf '%s' \"\$1\" | grep -q '^FIM_SCAN'" _ "$S"
+
+# ---------- T-CR ----------
+novo_ambiente
+CR="$(printf '\r')"
+mkdir -p "$H/Library/Caches/App${CR}x"; mb "$H/Library/Caches/App${CR}x/f" 1
+echo d > "$H/Downloads/a${CR}b.dmg"
+mkdir -p "$H/Library/Application Support/Sup${CR}x"; mb "$H/Library/Application Support/Sup${CR}x/f" 2
+S="$(roda scan)"; SID="$(sessao_de "$S")"
+verifica T-CR "\\r no nome vira NOME_INVALIDO nas 3 categorias" sh -c "[ \"\$(printf '%s\n' \"\$1\" | grep -c '^NOME_INVALIDO')\" = 3 ]" _ "$S"
+verifica T-CRb "\\r não entra na sessão" sh -c "! grep -q \"\$(printf '\\r')\" '$TRASH/.sessoes/$SID.tsv'"
+
+# ---------- T-SKILL3 ----------
+verifica T-SKILL3 "skill: menus novos, regra 1 ampliada, nunca oferecer apagar o que só aparece, 2.1.0" sh -c \
+  "grep -q 'Versão esperada: 2.1.0' '$SKILL' && grep -q 'limpar-dev' '$SKILL' && grep -q '\\[8\\]' '$SKILL' && grep -q '\\[9\\]' '$SKILL' && grep -q '\\[10\\]' '$SKILL' && for t in npm pnpm docker colima ollama hf xcrun; do sed -n '/^1\\. \\*\\*Nunca execute/,/^2\\./p' '$SKILL' | grep -q \"\\\`\$t\\\`\" || exit 1; done && grep -qi 'nunca ofereça apagar' '$SKILL' && grep -q 'pnpm_rodando' '$SKILL' && grep -q 'instalacao_em_andamento' '$SKILL'"
 
 # ---------- T-REAL / T-SC / T-BASH ----------
 verifica T-REAL "nenhum binário por caminho absoluto e nenhum ls" sh -c \
