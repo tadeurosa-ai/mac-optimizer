@@ -18,9 +18,11 @@ PATH_ORIGINAL="$PATH"
 HOME_ORIGINAL="$HOME"
 LINHA_INSTALACAO='mkdir -p ~/.claude/skills/optimizer/scripts && curl -fsSL https://raw.githubusercontent.com/tadeurosa-ai/mac-optimizer/main/optimizer/scripts/optimizer.sh -o ~/.claude/skills/optimizer/scripts/optimizer.sh && curl -fsSL https://raw.githubusercontent.com/tadeurosa-ai/mac-optimizer/main/optimizer/SKILL.md -o ~/.claude/skills/optimizer/SKILL.md && command rm -f ~/.claude/commands/optimizer.md && echo "Mac Optimizer instalado. Abra o Claude Code e digite /optimizer"'
 
-PASSOU=0; FALHOU=0; LISTA_FALHAS=""
+PASSOU=0; FALHOU=0; PULOU=0; LISTA_FALHAS=""; LISTA_PULOS=""
 ok()    { PASSOU=$((PASSOU+1)); echo "  ok    $1"; }
 falha() { FALHOU=$((FALHOU+1)); LISTA_FALHAS="$LISTA_FALHAS $1"; echo "  FALHA $1 — $2"; }
+# Pulado = não deu para rodar aqui (não é aprovação): aparece em separado no resultado.
+pula()  { PULOU=$((PULOU+1)); LISTA_PULOS="$LISTA_PULOS $1"; echo "  PULADO $1 — $2"; }
 verifica() { local nome="$1" desc="$2"; shift 2; if "$@"; then ok "$nome"; else falha "$nome" "$desc"; fi; }
 
 AMBIENTES=""
@@ -859,7 +861,7 @@ if git -C "$REPO" show 407fda7:optimizer/scripts/optimizer.sh > "$ANTIGO" 2>/dev
   OUT="$(roda quarentena --sessao "$SID" --itens "$IDV")"
   verifica T-APPSUP-AGIR "sessão da 2.0.0 com ID de MobileSync: recusa protegido" sh -c "[ -n '$IDV' ] && printf '%s' \"\$1\" | grep -q '^RECUSADO|$IDV|protegido' && [ -e '$H/Library/Application Support/MobileSync/Backup/x/f' ]" _ "$OUT"
 else
-  falha T-APPSUP-AGIR "não deu para obter o script 2.0.0 do git"
+  pula T-APPSUP-AGIR "sem o histórico do git, não há o script 2.0.0 para criar a sessão antiga"
 fi
 novo_ambiente
 export HF_HOME="$H/Library/Caches/hf"; mkdir -p "$HF_HOME/hub"; mb "$HF_HOME/hub/m" 1
@@ -954,5 +956,6 @@ fi
 verifica T-BASH "rodando em bash 3.2" sh -c "/bin/bash -c 'echo \$BASH_VERSION' | grep -q '^3\\.2'"
 
 echo ""
-echo "Resultado: $PASSOU passaram, $FALHOU falharam."
+echo "Resultado: $PASSOU passaram, $FALHOU falharam, $PULOU pulados."
+[ "$PULOU" -eq 0 ] || echo "Pulados (não rodaram):$LISTA_PULOS"
 [ "$FALHOU" -eq 0 ] || { echo "Falharam:$LISTA_FALHAS"; exit 1; }

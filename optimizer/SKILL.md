@@ -104,7 +104,7 @@ Pergunte: "Quer só **ver** o que dá para limpar (modo prévia — nada é apag
   deixou ler; não insista.
 - `SISTEMA|<parte>|<MB ou n>` — de que são feitos os Dados do Sistema: `vm` (memória virtual), `preboot`,
   `recovery`, `snapshots` (quantidade), `caches`, `logs`, `pastas_escondidas` (npm, Ollama, Colima, pnpm,
-  Xcode). Diga sempre: "a soma não é o número que o Ajustes mostra; a Apple não informa a composição exata e
+  Xcode e a pasta `.cache`, onde ficam Hugging Face, whisper, uv e outros). Diga sempre: "a soma não é o número que o Ajustes mostra; a Apple não informa a composição exata e
   diz que essa categoria não pode ser gerenciada".
 - `AVISO|sem_permissao|<pasta>` — o macOS não deixou procurar nessa pasta (Mesa, Documentos ou Downloads); o
   scan seguiu sem ela. Mesma orientação de Arquivos e Pastas acima, para a pasta indicada.
