@@ -47,7 +47,7 @@
   <p class="subtitle">Sem comandos. Sem configuração. Você só responde as perguntas.</p>
   <div class="install-box">
     <p>Cole no Terminal e pressione Enter:</p>
-    <code>mkdir -p ~/.claude/commands && curl -fsSL https://raw.githubusercontent.com/tadeurosa-ai/mac-optimizer/main/optimizer.md -o ~/.claude/commands/optimizer.md && echo "✓ /optimizer instalado"</code>
+    <code>mkdir -p ~/.claude/skills/optimizer/scripts && curl -fsSL https://raw.githubusercontent.com/tadeurosa-ai/mac-optimizer/main/optimizer/scripts/optimizer.sh -o ~/.claude/skills/optimizer/scripts/optimizer.sh && curl -fsSL https://raw.githubusercontent.com/tadeurosa-ai/mac-optimizer/main/optimizer/SKILL.md -o ~/.claude/skills/optimizer/SKILL.md && command rm -f ~/.claude/commands/optimizer.md && echo "Mac Optimizer instalado. Abra o Claude Code e digite /optimizer"</code>
   </div>
 </div>
 
@@ -92,7 +92,7 @@
 
     <div class="step">
       <h3>Instalar o Mac Optimizer</h3>
-      <pre><code>mkdir -p ~/.claude/commands && curl -fsSL https://raw.githubusercontent.com/tadeurosa-ai/mac-optimizer/main/optimizer.md -o ~/.claude/commands/optimizer.md && echo "✓ /optimizer instalado"</code></pre>
+      <pre><code>mkdir -p ~/.claude/skills/optimizer/scripts && curl -fsSL https://raw.githubusercontent.com/tadeurosa-ai/mac-optimizer/main/optimizer/scripts/optimizer.sh -o ~/.claude/skills/optimizer/scripts/optimizer.sh && curl -fsSL https://raw.githubusercontent.com/tadeurosa-ai/mac-optimizer/main/optimizer/SKILL.md -o ~/.claude/skills/optimizer/SKILL.md && command rm -f ~/.claude/commands/optimizer.md && echo "Mac Optimizer instalado. Abra o Claude Code e digite /optimizer"</code></pre>
       <p>Só precisa fazer isso uma vez. O comando fica salvo para sempre.</p>
     </div>
 
@@ -128,7 +128,7 @@
     </div>
     <div class="faq-item">
       <strong>Como desinstalar?</strong>
-      <pre><code>rm ~/.claude/commands/optimizer.md</code></pre>
+      <pre><code>rm -r ~/.claude/skills/optimizer</code></pre>
     </div>
   </div>
 </div>
